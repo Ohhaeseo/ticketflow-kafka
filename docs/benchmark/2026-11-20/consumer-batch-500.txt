@@ -1,0 +1,48 @@
+# PERF-01 consumer-batch-500
+scenario=stage users=1000 tickets=100 rate=500 duration=10s
+k6_wall_s=11.4 drain_after_k6_s=9.2
+hikari_max_active=10 hikari_max_pending=191 (samples=17)
+=== k6 summary ===
+RUN_LABEL=consumer-batch-500
+TITLE=PERF-01 consumer-batch-500
+EVENT_IDS=[96,97,98,99,100,101]
+reserve_requests=4361
+reserve_rps=413.4
+test_duration_s=10.6
+reserve_p50_ms=1154.1
+reserve_p95_ms=2941.0
+reserve_p99_ms=3410.7
+reserve_max_ms=4098.9
+accepted=4361
+status_409=0
+status_429=0
+status_4xx_other=0
+status_5xx=0
+network_errors=0
+error_rate_pct=0.0
+dropped_iterations=639
+max_vus=916
+--- reservations (M2 confirm latency = updated_at - created_at)
+ reservations | confirmed | sold_out | failed | queued | confirm_p50_ms | confirm_p95_ms | confirm_p99_ms | confirm_max_ms 
+--------------+-----------+----------+--------+--------+----------------+----------------+----------------+----------------
+         4361 |      4361 |        0 |      0 |      0 |         6014.0 |         8803.3 |         8963.8 |         9011.4
+
+--- stock invariant per event (PRD 12.3)
+ event_id | total_tickets | remaining_tickets | confirmed | invariant_ok 
+----------+---------------+-------------------+-----------+--------------
+       96 |          1000 |                 0 |      1000 | t
+       97 |          1000 |                 0 |      1000 | t
+       98 |          1000 |                 0 |      1000 | t
+       99 |          1000 |                 0 |      1000 | t
+      100 |          1000 |               639 |       361 | t
+      101 |          1000 |              1000 |         0 | t
+
+--- outbox (M7, async only)
+ outbox_rows | unpublished | publish_p95_ms | publish_max_ms 
+-------------+-------------+----------------+----------------
+        4361 |           0 |         3557.0 |         3746.8
+
+--- processing throughput (processed_messages)
+ processed | span_s | per_second 
+-----------+--------+------------
+      4361 |  14.63 |        298
