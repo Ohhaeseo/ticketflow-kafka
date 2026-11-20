@@ -66,7 +66,9 @@ Docker만 실행 중이면 됩니다. Testcontainers가 Compose와 같은 이미
 | `messaging/RecordListenerModeIntegrationTest` | 비교용 레코드 모드(`batch-enabled=false`)가 ack-mode record로 동작 (별도 컨텍스트) |
 | `messaging/dlt/DeadLetterAuditListenerTest` | DLT 스택 트레이스에서 가장 깊은 원인 찾기 (단위) |
 
-총 67개. `@IntegrationTest`는 `@AutoConfigureMetrics`를 포함한다 (Spring Boot는 테스트에서 지표 내보내기를 기본으로 끈다). 동시성·중복 테스트는 반복 실행으로 결과가 흔들리지 않는 것을 확인했습니다. 재고 불변식 검사는 `support/StockInvariant`를 함께 씁니다.
+`ReservationProcessorTest`에는 SQL 한 문장 판정(11-21)의 경계 테스트 2개도 있다: 같은 배치 트랜잭션에서 앞의 재고 감소가 보이는지(티켓 1장에 2건 → CONFIRMED, SOLD_OUT), 재고 0과 판매 종료가 겹치면 SOLD_OUT인지.
+
+총 69개. `@IntegrationTest`는 `@AutoConfigureMetrics`를 포함한다 (Spring Boot는 테스트에서 지표 내보내기를 기본으로 끈다). 동시성·중복 테스트는 반복 실행으로 결과가 흔들리지 않는 것을 확인했습니다. 재고 불변식 검사는 `support/StockInvariant`를 함께 씁니다.
 
 Relay와 Consumer는 테스트 중에도 백그라운드에서 돈다. 처리 로직만 따로 검증할 때는 Outbox 없이 예약을 직접 저장해(`ReservationCommandRepository`) Consumer가 끼어들지 않게 한다.
 

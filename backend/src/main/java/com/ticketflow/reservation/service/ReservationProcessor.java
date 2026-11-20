@@ -1,12 +1,11 @@
 package com.ticketflow.reservation.service;
 
-import com.ticketflow.event.repository.EventStockRepository;
-import com.ticketflow.event.repository.EventStockRepository.StockState;
 import com.ticketflow.idempotency.repository.ProcessedMessageRepository;
 import com.ticketflow.messaging.dto.ReservationRequestedMessage;
-import com.ticketflow.reservation.entity.ReservationStatus;
 import com.ticketflow.reservation.repository.ReservationCommandRepository;
 import com.ticketflow.reservation.repository.ReservationCommandRepository.LockedReservation;
+import com.ticketflow.reservation.repository.ReservationOutcomeRepository;
+import com.ticketflow.reservation.repository.ReservationOutcomeRepository.Applied;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
@@ -26,13 +25,13 @@ import java.util.Optional;
 /**
  * 예약 접수 이벤트를 처리해 최종 상태를 정한다 (PRD §8.3, FR-CSM-01, FR-INV-01).
  * <p>
- * 하나의 DB 트랜잭션 안에서 아래 순서로 실행한다.
+ * 하나의 DB 트랜잭션 안에서 아래 순서로 실행한다 (메시지당 SQL 왕복 3번).
  * <ol>
  *   <li>예약 행 잠금 ({@code FOR UPDATE}). 같은 예약에 대한 메시지는 여기서 한 줄로 선다.</li>
- *   <li>같은 {@code message_id}를 이미 처리했으면 건너뜀 (processed_messages).</li>
- *   <li>예약이 QUEUED가 아니면 건너뜀 (다른 message_id로 온 중복).</li>
- *   <li>조건부 재고 감소 → CONFIRMED / SOLD_OUT / FAILED 전이.</li>
- *   <li>processed_messages에 결과 기록.</li>
+ *   <li>같은 {@code message_id}를 이미 처리했으면 건너뜀 (processed_messages). 잠금을 얻은 뒤 새로 조회한다.</li>
+ *   <li>예약이 QUEUED가 아니면 이력만 남기고 건너뜀 (다른 message_id로 온 중복).</li>
+ *   <li>{@link ReservationOutcomeRepository} 한 문장: 조건부 재고 감소 → CONFIRMED / SOLD_OUT / FAILED 판정 →
+ *       상태 변경 → processed_messages 기록.</li>
  * </ol>
  * 중간에 실패하면 재고, 상태, 처리 이력이 함께 롤백되고 오프셋도 커밋되지 않는다 (FR-INV-03).
  */
@@ -44,19 +43,19 @@ public class ReservationProcessor {
     private static final Logger log = LoggerFactory.getLogger(ReservationProcessor.class);
 
     private final ReservationCommandRepository reservationCommandRepository;
-    private final EventStockRepository eventStockRepository;
+    private final ReservationOutcomeRepository reservationOutcomeRepository;
     private final ProcessedMessageRepository processedMessageRepository;
     private final Clock clock;
     private final MeterRegistry meterRegistry;
     private final Timer processingTimer;
 
     public ReservationProcessor(ReservationCommandRepository reservationCommandRepository,
-                                EventStockRepository eventStockRepository,
+                                ReservationOutcomeRepository reservationOutcomeRepository,
                                 ProcessedMessageRepository processedMessageRepository,
                                 Clock clock,
                                 MeterRegistry meterRegistry) {
         this.reservationCommandRepository = reservationCommandRepository;
-        this.eventStockRepository = eventStockRepository;
+        this.reservationOutcomeRepository = reservationOutcomeRepository;
         this.processedMessageRepository = processedMessageRepository;
         this.clock = clock;
         this.meterRegistry = meterRegistry;
@@ -126,15 +125,11 @@ public class ReservationProcessor {
         }
 
         Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
-        ProcessingOutcome outcome = decide(reservation, message, now);
-        processedMessageRepository.record(message.messageId(), reservation.id(), outcome.name(), now);
-        return outcome;
-    }
-
-    private ProcessingOutcome decide(LockedReservation reservation, ReservationRequestedMessage message, Instant now) {
         if (reservation.status().isFinal()) {
             log.info("Reservation already final: reservationId={} status={} messageId={}",
                     reservation.id(), reservation.status(), message.messageId());
+            processedMessageRepository.record(message.messageId(), reservation.id(),
+                    ProcessingOutcome.SKIPPED_ALREADY_PROCESSED.name(), now);
             return ProcessingOutcome.SKIPPED_ALREADY_PROCESSED;
         }
         if (reservation.eventId() != message.eventId()) {
@@ -142,31 +137,15 @@ public class ReservationProcessor {
                     message.eventId(), reservation.eventId());
         }
 
-        if (eventStockRepository.decrementIfAvailable(reservation.eventId()) == 1) {
-            complete(reservation.id(), ReservationStatus.CONFIRMED, null, now);
-            return ProcessingOutcome.CONFIRMED;
-        }
-
-        StockState stock = eventStockRepository.findStockState(reservation.eventId());
-        if (stock.remainingTickets() == 0) {
-            complete(reservation.id(), ReservationStatus.SOLD_OUT, null, now);
-            return ProcessingOutcome.SOLD_OUT;
-        }
-        if (!stock.onSale()) {
-            // PRD Q3: 판매 기간 안에 접수됐지만 종료 후 처리된 예약
-            complete(reservation.id(), ReservationStatus.FAILED, SALES_CLOSED, now);
-            return ProcessingOutcome.FAILED;
-        }
-        // 재고가 있고 판매 중인데 감소가 실패한 경우: 일시적 이상으로 보고 예외로 재시도하게 한다
-        throw new IllegalStateException("Stock decrement failed although stock is available: eventId="
-                + reservation.eventId());
-    }
-
-    private void complete(long reservationId, ReservationStatus status, String failureReason, Instant now) {
-        int updated = reservationCommandRepository.completeIfQueued(reservationId, status, failureReason, now);
-        if (updated != 1) {
+        // 재고 감소 → 결과 판정 → 상태 변경 → 처리 이력을 SQL 한 문장으로 (왕복 1번)
+        Applied applied = reservationOutcomeRepository
+                .decideAndApply(reservation.id(), reservation.eventId(), message.messageId(), now)
+                .orElseThrow(() -> new IllegalStateException("Event " + reservation.eventId() + " not found"));
+        if (applied.updatedRows() != 1 || applied.recordedRows() != 1) {
             // 행을 잠근 상태라 일어나면 안 된다. 예외로 재고 감소까지 롤백한다.
-            throw new IllegalStateException("Reservation " + reservationId + " was not QUEUED while locked");
+            throw new IllegalStateException("Reservation " + reservation.id() + " was not applied while locked: "
+                    + applied);
         }
+        return ProcessingOutcome.valueOf(applied.outcome());
     }
 }

@@ -97,7 +97,7 @@ python experiments/crash_test.py spike --users 1000 --tickets 100 --kill-at 3.5 
 
 ## 6. 마무리 (30초) — GitHub
 
-- Actions 탭에서 CI가 초록색인 것을 보여 줍니다. Testcontainers 테스트 67개가 실제 Kafka·PostgreSQL·Redis로 돕니다.
+- Actions 탭에서 CI가 초록색인 것을 보여 줍니다. Testcontainers 테스트 69개가 실제 Kafka·PostgreSQL·Redis로 돕니다.
 - README의 DoD 체크리스트를 보여 주며 마칩니다.
 
 ## 녹화 후 정리

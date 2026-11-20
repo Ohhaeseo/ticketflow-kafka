@@ -60,24 +60,7 @@ public class ReservationCommandRepository {
                 .optional();
     }
 
-    /**
-     * QUEUED인 예약만 최종 상태로 바꾼다. 이미 처리된 예약은 바뀌지 않는다 (PRD §9.3).
-     *
-     * @return 바뀐 행 수 (0 또는 1)
-     */
-    public int completeIfQueued(long reservationId, ReservationStatus status, String failureReason, Instant now) {
-        return jdbcClient.sql("""
-                        UPDATE reservations
-                           SET status = :status, failure_reason = :failureReason, updated_at = :now
-                         WHERE id = :id
-                           AND status = 'QUEUED'
-                        """)
-                .param("status", status.name())
-                .param("failureReason", failureReason)
-                .param("now", OffsetDateTime.ofInstant(now, ZoneOffset.UTC))
-                .param("id", reservationId)
-                .update();
-    }
+    // 최종 상태 전이(WHERE status = 'QUEUED')는 ReservationOutcomeRepository의 한 문장 안에서 한다.
 
     public record LockedReservation(long id, long eventId, ReservationStatus status) {
     }

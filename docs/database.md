@@ -125,42 +125,53 @@ RETURNING id;
 
 FK가 없는 것은 의도한 설계다. 깨진 메시지는 어떤 예약에도 연결되지 않을 수 있다.
 
-## Consumer 처리 쿼리 (3~4주차 ✅)
+## Consumer 처리 쿼리 (3~4주차, 11-21 개선 ✅)
 
-`ReservationProcessor.process()`가 **한 트랜잭션** 안에서 아래 순서로 실행한다.
+`ReservationProcessor`가 **한 트랜잭션** 안에서 메시지마다 아래 순서로 실행한다. 메시지당 SQL 왕복은 **3번**이다. 11-21 이전에는 5~6번이었다 (재고 감소, 재고 상태 조회, 상태 변경, 이력 기록을 따로 실행).
 
 ```sql
 -- 1. 예약 행 잠금. 같은 예약에 대한 메시지는 여기서 줄을 선다
 SELECT id, event_id, status FROM reservations WHERE id = :id FOR UPDATE;
 
 -- 2. 같은 message_id를 이미 처리했으면 끝낸다 (MSG-01: Kafka 재전달, Outbox 재발행)
+--    잠금을 얻은 뒤 새 문장으로 조회해야, 동시에 처리된 같은 메시지의 커밋 결과가 보인다
 SELECT EXISTS (SELECT 1 FROM processed_messages WHERE message_id = :messageId);
 
--- 3. status가 QUEUED가 아니면 재고를 건드리지 않는다 (다른 message_id로 온 중복)
+-- (status가 QUEUED가 아니면 재고를 건드리지 않고 이력만 남긴다: 다른 message_id로 온 중복)
 
--- 4. 조건부 재고 감소 (FR-INV-01)
-UPDATE events
-   SET remaining_tickets = remaining_tickets - 1
- WHERE id = :eventId
-   AND remaining_tickets > 0
-   AND sales_start_at <= CURRENT_TIMESTAMP
-   AND sales_end_at   >  CURRENT_TIMESTAMP;
-
--- 5-a. 1행이면 확정
-UPDATE reservations SET status = 'CONFIRMED', updated_at = :now WHERE id = :id AND status = 'QUEUED';
-
--- 5-b. 0행이면 원인을 가려 SOLD_OUT(재고 0) 또는 FAILED + SALES_CLOSED(판매 기간 밖)
-SELECT remaining_tickets,
-       (sales_start_at <= CURRENT_TIMESTAMP AND sales_end_at > CURRENT_TIMESTAMP) AS on_sale
-  FROM events WHERE id = :eventId;
-
--- 6. 처리 이력 기록
-INSERT INTO processed_messages (message_id, reservation_id, outcome, processed_at) VALUES (...);
+-- 3. 재고 감소 → 결과 판정 → 상태 변경 → 이력 기록을 한 문장으로 (ReservationOutcomeRepository)
+WITH stock AS (
+    UPDATE events SET remaining_tickets = remaining_tickets - 1
+     WHERE id = :eventId AND remaining_tickets > 0
+       AND sales_start_at <= CURRENT_TIMESTAMP AND sales_end_at > CURRENT_TIMESTAMP
+    RETURNING id
+),
+decision AS (
+    SELECT CASE WHEN EXISTS (SELECT 1 FROM stock) THEN 'CONFIRMED'
+                WHEN e.remaining_tickets = 0
+                  OR (e.sales_start_at <= CURRENT_TIMESTAMP AND e.sales_end_at > CURRENT_TIMESTAMP) THEN 'SOLD_OUT'
+                ELSE 'FAILED' END AS outcome
+      FROM events e WHERE e.id = :eventId
+),
+updated AS (
+    UPDATE reservations r SET status = d.outcome,
+           failure_reason = CASE WHEN d.outcome = 'FAILED' THEN 'SALES_CLOSED' END, updated_at = :now
+      FROM decision d WHERE r.id = :reservationId AND r.status = 'QUEUED'
+    RETURNING r.id
+),
+recorded AS (
+    INSERT INTO processed_messages (message_id, reservation_id, outcome, processed_at)
+    SELECT :messageId, :reservationId, d.outcome, :now FROM decision d
+    RETURNING message_id
+)
+SELECT d.outcome, (SELECT count(*) FROM updated), (SELECT count(*) FROM recorded) FROM decision d;
 ```
 
-- 어느 단계에서든 예외가 나면 재고 감소, 상태 변경, 처리 이력이 함께 롤백된다 (FR-INV-03). 오프셋도 커밋되지 않아 메시지를 다시 받는다. 검증: `ReservationProcessorTest`에서 DB 트리거로 5단계를 실패시킨 뒤 재고가 원래대로인지 확인한다.
-- 재고 1장에 여러 예약이 동시에 4단계에 도달하면 `events` 행 잠금 때문에 순서대로 실행된다. 뒤에 실행되는 UPDATE는 앞 트랜잭션이 커밋된 값(0)으로 `WHERE remaining_tickets > 0`을 다시 평가하므로 0행이 된다 (READ COMMITTED 재평가). 검증: `ReservationConcurrencyTest` (CON-02).
-- `CURRENT_TIMESTAMP`는 트랜잭션 시작 시각이다. 판매 기간 판정은 DB 시각 기준이다.
+- **판정 규칙:** 재고 감소가 1행이면 CONFIRMED. 0행이고 재고가 0이거나 판매 기간 안이면 SOLD_OUT. 판매 기간 안인데 감소가 실패했다면 다른 트랜잭션이 마지막 재고를 가져간 것이다. 그 외(판매 기간 밖, 재고 남음)는 FAILED + SALES_CLOSED (PRD Q3).
+- **스냅샷:** `decision`의 `events` 조회는 이 문장의 스냅샷을 쓴다. 같은 트랜잭션에서 앞서 실행한 문장의 변경(배치 리스너가 앞 메시지에서 줄인 재고)은 보인다. 검증: `ReservationProcessorTest`의 배치 테스트 (티켓 1장에 2건 → CONFIRMED, SOLD_OUT).
+- **실패 처리:** 반영된 행 수가 1이 아니면 애플리케이션이 예외를 던진다. 문장 안 어디서 실패해도 재고 감소·상태 변경·처리 이력이 함께 롤백된다 (FR-INV-03). 오프셋도 커밋되지 않아 메시지를 다시 받는다. 검증: `ReservationProcessorTest`에서 DB 트리거로 상태 변경을 실패시킨 뒤 재고가 원래대로인지 확인한다.
+- **동시성:** 재고 1장에 여러 예약이 동시에 재고 감소에 도달하면 `events` 행 잠금 때문에 순서대로 실행된다. 뒤에 실행되는 UPDATE는 앞 트랜잭션이 커밋한 값(0)으로 `WHERE remaining_tickets > 0`을 다시 평가하므로 0행이 된다 (READ COMMITTED 재평가). 검증: `ReservationConcurrencyTest` (CON-02).
+- **시각:** `CURRENT_TIMESTAMP`는 트랜잭션 시작 시각이다. 판매 기간 판정은 DB 시각 기준이다.
 
 ## 상태 전이
 

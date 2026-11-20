@@ -13,6 +13,7 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -147,6 +148,37 @@ class ReservationProcessorTest {
         // 트리거를 없앤 뒤 같은 메시지를 다시 처리하면 정상 확정된다 (Kafka 재전달 상황)
         assertThat(processor.process(message)).isEqualTo(ProcessingOutcome.CONFIRMED);
         assertThat(remaining(eventId)).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("한 트랜잭션(배치)에서 앞의 재고 감소가 뒤 판정에 보인다: 티켓 1장에 2건 → CONFIRMED, SOLD_OUT")
+    void batchSeesEarlierDecrementsInSameTransaction() {
+        long eventId = openEvent(eventService, 1);
+        long first = queued(eventId, 209);
+        long second = queued(eventId, 210);
+
+        assertThat(processor.processBatch(List.of(message(first, eventId), message(second, eventId))))
+                .containsExactly(ProcessingOutcome.CONFIRMED, ProcessingOutcome.SOLD_OUT);
+
+        assertThat(remaining(eventId)).isZero();
+        assertThat(status(second)).isEqualTo("SOLD_OUT");
+    }
+
+    @Test
+    @DisplayName("재고 0이면서 판매도 끝났으면 SOLD_OUT (PRD Q3: 재고가 0이면 판매 기간과 관계없이 SOLD_OUT)")
+    void soldOutTakesPrecedenceOverSalesClosed() {
+        long eventId = openEvent(eventService, 1);
+        long first = queued(eventId, 207);
+        long second = queued(eventId, 208);
+        assertThat(processor.process(message(first, eventId))).isEqualTo(ProcessingOutcome.CONFIRMED);
+        jdbcTemplate.update("UPDATE events SET sales_end_at = CURRENT_TIMESTAMP - INTERVAL '1 second' WHERE id = ?",
+                eventId);
+
+        assertThat(processor.process(message(second, eventId))).isEqualTo(ProcessingOutcome.SOLD_OUT);
+
+        Map<String, Object> row = jdbcTemplate.queryForMap(
+                "SELECT status, failure_reason FROM reservations WHERE id = ?", second);
+        assertThat(row).containsEntry("status", "SOLD_OUT").containsEntry("failure_reason", null);
     }
 
     @Test

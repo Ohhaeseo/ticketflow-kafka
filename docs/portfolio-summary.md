@@ -14,7 +14,7 @@ Spring Boot·Kafka·PostgreSQL 기반 비동기 티켓 예약 서버. Transactio
 - 부하 중 프로세스 강제 종료 4회와 Kafka 브로커 중단을 재현해 **유실 0, 중복 반영 0** 확인. 재시작 후 45초간 처리가 멈추는 원인(Consumer 세션 타임아웃)을 찾아 정적 멤버십으로 **복구 시간을 41초에서 4~9초로 단축**
 - 동기 처리와 Kafka 비동기 처리를 같은 조건(50~500 RPS)으로 비교: 비동기는 500 RPS에서 접수 p95 55ms(동기 5,008ms)로 버티지만, 공연 하나의 확정 처리량은 두 방식 모두 약 220건/s로 같다는 점을 수치로 정리
 - Consumer를 배치 리스너(poll 묶음 = DB 트랜잭션 1개, 문제 레코드만 DLT로 격리)로 바꿔 같은 조건 짝 비교에서 **처리 속도 +26~31%, 확정 p95 약 절반**
-- 재시도(지수 백오프)·DLT 감사 이력·Redis 빈도 제한(fail-open)·Prometheus/Grafana 대시보드 구성. Testcontainers 기반 테스트 67개를 GitHub Actions로 실행
+- 재시도(지수 백오프)·DLT 감사 이력·Redis 빈도 제한(fail-open)·Prometheus/Grafana 대시보드 구성. Testcontainers 기반 테스트 69개를 GitHub Actions로 실행
 
 ## 면접에서 이야기할 것
 
@@ -49,7 +49,7 @@ Spring Boot·Kafka·PostgreSQL 기반 비동기 티켓 예약 서버. Transactio
 
 ### "테스트는 어떻게 했나요?"
 
-- 모든 통합 테스트는 Testcontainers로 실제 Kafka·PostgreSQL·Redis를 띄워 돌립니다. 컨텍스트와 컨테이너를 공유해서 67개가 약 2분에 끝납니다.
+- 모든 통합 테스트는 Testcontainers로 실제 Kafka·PostgreSQL·Redis를 띄워 돌립니다. 컨텍스트와 컨테이너를 공유해서 69개가 약 2분에 끝납니다.
 - 롤백은 DB 트리거로 실패를 주입해 검증했습니다. 일시 오류 재시도는 롤백되지 않는 시퀀스로 시도 횟수를 셌습니다. Mock 없이 실제 DB 동작을 확인했습니다.
 
 ## 숫자 출처

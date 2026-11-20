@@ -17,7 +17,7 @@ Kafka 이벤트 기반 비동기 예약 · 동시성 제어 · 장애 대응 · 
 
 [![CI](https://github.com/Ohhaeseo/ticketflow-kafka/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohhaeseo/ticketflow-kafka/actions/workflows/ci.yml)
 ![Status](https://img.shields.io/badge/status-8_weeks_done-brightgreen?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-67_passed-success?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-69_passed-success?style=flat-square)
 ![Period](https://img.shields.io/badge/period-8_weeks-blue?style=flat-square)
 ![Cost](https://img.shields.io/badge/cost-%E2%82%A90-success?style=flat-square)
 
@@ -35,7 +35,7 @@ Kafka 이벤트 기반 비동기 예약 · 동시성 제어 · 장애 대응 · 
 | 같은 요청 10개 동시 전송 · 같은 Kafka 메시지 재전달 | 예약 1건, 재고 1회 감소 |
 | 부하 중 프로세스 강제 종료 4회 · Kafka 브로커 14초 중단 | **유실 0, 중복 반영 0** |
 | 같은 조건 동기 vs 비동기 (50~500 RPS) | 비동기는 접수 p95 55ms(500 RPS)로 버티지만, 공연 하나의 확정 처리량은 두 방식 모두 약 220건/s |
-| 자동 테스트 | Testcontainers 통합·단위 테스트 67개, GitHub Actions에서 실행 |
+| 자동 테스트 | Testcontainers 통합·단위 테스트 69개, GitHub Actions에서 실행 |
 
 ### ✅ 완료 기준 (PRD DoD)
 
