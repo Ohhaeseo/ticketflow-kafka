@@ -1,0 +1,15 @@
+# 로컬 개발 전용 설정. 공개 배포 환경에서는 이 프로필을 켜지 않는다.
+ticketflow:
+  admin:
+    local-endpoints-enabled: true # POST /api/v1/events 허용 (PRD FR-EVT-01)
+
+management:
+  endpoint:
+    health:
+      show-details: always
+
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true

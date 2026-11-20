@@ -1,0 +1,64 @@
+spring:
+  application:
+    name: ticketflow
+  # 루트의 .env를 읽는다 (backend/에서 실행하면 ../.env). 없으면 기본값을 쓴다.
+  config:
+    import:
+      - optional:file:../.env[.properties]
+      - optional:file:./.env[.properties]
+  profiles:
+    default: local
+
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:15432}/${POSTGRES_DB:ticketflow}
+    username: ${POSTGRES_USER:ticketflow}
+    password: ${POSTGRES_PASSWORD:}
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate # 스키마는 Flyway만 변경한다
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      acks: all
+      properties:
+        enable.idempotence: true
+    consumer:
+      group-id: ticketflow-reservation
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+
+server:
+  port: ${SERVER_PORT:8080}
+
+ticketflow:
+  kafka:
+    reservation-requested-topic: reservation.requested.v1
+    reservation-requested-dlt-topic: reservation.requested.v1-dlt
+    partitions: 3          # PRD Q6 제안값
+    replication-factor: 1  # 로컬 단일 브로커
+  admin:
+    local-endpoints-enabled: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+# API 문서는 local 프로필에서만 연다 (application-local.yml)
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+logging:
+  level:
+    org.apache.kafka: WARN
