@@ -1,0 +1,36 @@
+# --- Secrets ---
+.env
+.env.*
+!.env.example
+
+# --- Gradle / Java ---
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+*.class
+*.log
+hs_err_pid*
+
+# --- IDE ---
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.project
+.classpath
+.settings/
+bin/
+out/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Load test / experiment raw output ---
+load-tests/results/
+*.k6.json
+
+# --- Local Docker volumes (if bind-mounted) ---
+infrastructure/data/

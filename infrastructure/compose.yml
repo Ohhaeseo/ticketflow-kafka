@@ -1,0 +1,17 @@
+# TicketFlow Kafka — 로컬 인프라 (PRD §14.2)
+#
+# 1주차에 작성합니다.
+#   - 화 11/24: postgres
+#   - 수 11/25: kafka (KRaft single-node)
+#   - 7주차:    redis
+#
+# 작성 규칙
+#   - 이미지 태그는 버전을 고정합니다. `latest` 금지 (NFR-REP-02).
+#   - Kafka 환경 변수와 Listener 설정은 고정한 이미지 버전의 공식 문서로 검증합니다.
+#   - 호스트 포트는 127.0.0.1에만 바인딩합니다. 예: "127.0.0.1:5432:5432" (NFR-SEC-01).
+#   - 비밀값은 루트의 .env에서 읽습니다 (.env.example 참고).
+#
+# 실행 (작성 후):
+#   docker compose -f infrastructure/compose.yml --env-file .env up -d
+
+services: {}
