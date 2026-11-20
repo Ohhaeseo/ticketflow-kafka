@@ -7,6 +7,7 @@ import com.ticketflow.global.exception.BusinessException;
 import com.ticketflow.global.exception.DuplicateReservationException;
 import com.ticketflow.global.exception.ErrorCode;
 import com.ticketflow.idempotency.service.IdempotencyKeys;
+import com.ticketflow.messaging.dto.ReservationRequestedMessage;
 import com.ticketflow.messaging.producer.ReservationEventOutbox;
 import com.ticketflow.reservation.dto.CreateReservationRequest;
 import com.ticketflow.reservation.dto.ReservationResponse;
@@ -36,6 +37,8 @@ public class ReservationService {
     private final EventRepository eventRepository;
     private final UserRepository userRepository;
     private final ReservationEventOutbox reservationEventOutbox;
+    private final ReservationProcessor reservationProcessor;
+    private final ReservationProperties reservationProperties;
     private final Clock clock;
 
     public ReservationService(ReservationRepository reservationRepository,
@@ -43,12 +46,16 @@ public class ReservationService {
                               EventRepository eventRepository,
                               UserRepository userRepository,
                               ReservationEventOutbox reservationEventOutbox,
+                              ReservationProcessor reservationProcessor,
+                              ReservationProperties reservationProperties,
                               Clock clock) {
         this.reservationRepository = reservationRepository;
         this.reservationCommandRepository = reservationCommandRepository;
         this.eventRepository = eventRepository;
         this.userRepository = userRepository;
         this.reservationEventOutbox = reservationEventOutbox;
+        this.reservationProcessor = reservationProcessor;
+        this.reservationProperties = reservationProperties;
         this.clock = clock;
     }
 
@@ -83,9 +90,13 @@ public class ReservationService {
         Optional<Long> createdId = reservationCommandRepository.insertQueuedIfAbsent(
                 event.getId(), user.userId(), idempotencyKey, requestHash, now);
         if (createdId.isPresent()) {
+            long reservationId = createdId.get();
+            if (reservationProperties.synchronous()) {
+                return processSynchronously(reservationId, event.getId(), now);
+            }
             // 같은 트랜잭션에서 Outbox 기록: 예약이 커밋되면 이벤트도 반드시 남는다 (FR-OBX-01)
-            reservationEventOutbox.reservationRequested(createdId.get(), event.getId(), now);
-            return new ReservationResult(ReservationResponse.queued(createdId.get(), event.getId(), now), true);
+            reservationEventOutbox.reservationRequested(reservationId, event.getId(), now);
+            return ReservationResult.accepted(ReservationResponse.queued(reservationId, event.getId(), now));
         }
 
         return findReplay(user.userId(), idempotencyKey, requestHash)
@@ -115,8 +126,19 @@ public class ReservationService {
                     if (!existing.hasSameRequest(requestHash)) {
                         throw new BusinessException(ErrorCode.IDEMPOTENCY_KEY_REUSED);
                     }
-                    return new ReservationResult(ReservationResponse.from(existing), false);
+                    return ReservationResult.replay(ReservationResponse.from(existing));
                 });
+    }
+
+    /**
+     * 벤치마크 비교용 동기 처리 (FR-BMK-01). Consumer와 같은 처리 로직을 요청 트랜잭션 안에서 바로 실행하므로
+     * DB 작업은 비동기 방식과 같고, Outbox·Kafka만 빠진다. 응답 시점에 이미 최종 상태다.
+     */
+    private ReservationResult processSynchronously(long reservationId, long eventId, Instant now) {
+        reservationProcessor.process(ReservationRequestedMessage.create(reservationId, eventId, now));
+        Reservation processed = reservationRepository.findById(reservationId)
+                .orElseThrow(() -> new IllegalStateException("Reservation disappeared: " + reservationId));
+        return ReservationResult.processedNow(ReservationResponse.from(processed));
     }
 
     private static void validateSalesPeriod(Event event, Instant now) {

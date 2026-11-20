@@ -44,6 +44,7 @@ public class ReservationController {
     @Parameter(name = "X-Test-User-Id", in = ParameterIn.HEADER, required = true,
             description = "테스트용 사용자 ID (local 전용, 1~1000 시드)", schema = @Schema(type = "integer", example = "42"))
     @ApiResponse(responseCode = "202", description = "최초 접수 (QUEUED). 좌석 확정이 아님")
+    @ApiResponse(responseCode = "201", description = "동기 비교 모드(processing-mode=sync)에서 최초 접수. 이미 CONFIRMED/SOLD_OUT")
     @ApiResponse(responseCode = "200", description = "같은 키·같은 본문 재요청. 기존 예약의 현재 상태")
     @ApiResponse(responseCode = "400", description = "INVALID_REQUEST, INVALID_IDEMPOTENCY_KEY",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
@@ -63,6 +64,10 @@ public class ReservationController {
             @Valid @RequestBody CreateReservationRequest request) {
         ReservationResult result = reservationService.reserve(user, idempotencyKey, request);
         ReservationResponse body = result.reservation();
+        if (result.created() && result.processed()) {
+            // 동기 비교 모드: 응답 시점에 최종 상태가 정해져 있다
+            return ResponseEntity.created(URI.create(body.statusUrl())).body(body);
+        }
         if (result.created()) {
             return ResponseEntity.accepted().location(URI.create(body.statusUrl())).body(body);
         }

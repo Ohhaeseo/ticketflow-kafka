@@ -46,6 +46,9 @@ ticketflow:
     reservation-requested-dlt-topic: reservation.requested.v1-dlt
     partitions: 3          # PRD Q6
     replication-factor: 1  # 로컬 단일 브로커
+  reservation:
+    # async: 접수(202) 후 Outbox → Kafka → Consumer가 확정. sync: 벤치마크 비교용, 요청 안에서 바로 확정(201)
+    processing-mode: async
   outbox:
     relay:
       enabled: true
