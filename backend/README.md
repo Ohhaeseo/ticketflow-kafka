@@ -27,6 +27,7 @@ cd backend
 - 기본 프로필은 `local`입니다. 공연 등록 API, Swagger UI, 테스트용 헤더 인증(`X-Test-User-Id`), 합성 사용자 시드가 켜집니다. 다른 프로필에서는 모두 꺼집니다.
 - DB·Kafka 접속 정보는 루트의 `.env`에서 읽습니다 (`spring.config.import: optional:file:../.env[.properties]`).
 - Compose 없이 Testcontainers로 인프라까지 띄우려면 `.\gradlew.bat bootTestRun`을 실행합니다.
+- 벤치마크용 동기 처리 모드: `.\gradlew.bat bootRun --args='--ticketflow.reservation.processing-mode=sync'` (접수 응답 201 + 최종 상태, Outbox·Kafka 미사용)
 
 ## 테스트
 
@@ -50,8 +51,9 @@ Docker만 실행 중이면 됩니다. Testcontainers가 Compose와 같은 이미
 | `messaging/DuplicateMessageIntegrationTest` | **MSG-01**: 같은 messageId를 실제 Kafka로 2번 전송 → 재고 1회 감소, 처리 이력 1건 |
 | `reservation/ReservationFlowIntegrationTest` | **E2E**: 티켓 2장·3명 → Outbox → Kafka → Consumer → CONFIRMED 2, SOLD_OUT 1, 잔여 0, 미발행 0 |
 | `outbox/OutboxIntegrationTest` | 접수 시 Outbox 1건(계약 필드), 재요청·409는 Outbox 없음, Relay 발행 후 `published_at` |
+| `reservation/SyncProcessingModeIntegrationTest` | **FR-BMK-01** 동기 비교 모드: 201 + 최종 상태, Outbox 없음, 재요청 200, 동시 접수 시 재고만큼만 확정 (별도 컨텍스트) |
 
-총 46개. 동시성·중복 테스트는 반복 실행으로 결과가 흔들리지 않는 것을 확인했습니다. 재고 불변식 검사는 `support/StockInvariant`를 함께 씁니다.
+총 48개. 동시성·중복 테스트는 반복 실행으로 결과가 흔들리지 않는 것을 확인했습니다. 재고 불변식 검사는 `support/StockInvariant`를 함께 씁니다.
 
 Relay와 Consumer는 테스트 중에도 백그라운드에서 돈다. 처리 로직만 따로 검증할 때는 Outbox 없이 예약을 직접 저장해(`ReservationCommandRepository`) Consumer가 끼어들지 않게 한다.
 

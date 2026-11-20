@@ -15,8 +15,8 @@ Kafka 이벤트 기반 비동기 예약 · 동시성 제어 · 장애 대응 · 
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-FF4438?style=for-the-badge&logo=redis&logoColor=white)
 
-![Status](https://img.shields.io/badge/status-week_4_done-brightgreen?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-46_passed-success?style=flat-square)
+![Status](https://img.shields.io/badge/status-week_5_done-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-48_passed-success?style=flat-square)
 ![Period](https://img.shields.io/badge/period-8_weeks-blue?style=flat-square)
 ![Cost](https://img.shields.io/badge/cost-%E2%82%A90-success?style=flat-square)
 
@@ -27,8 +27,8 @@ Kafka 이벤트 기반 비동기 예약 · 동시성 제어 · 장애 대응 · 
 <br>
 
 > [!NOTE]
-> **4주차 완료** (2026-11-20 기준): 접수(`202`) → Transactional Outbox → Relay → Kafka → Consumer → `CONFIRMED`/`SOLD_OUT` 전체 흐름이 동작합니다. 티켓 100장에 150명이 동시에 접수하면 **정확히 100건만 확정**되고, 같은 메시지를 다시 받아도 재고는 한 번만 줄어듭니다 (MSG-01, CON-02).
-> 다음은 5주차 k6 1,000명 시뮬레이션(LOAD-01)과 동기 방식 비교입니다.
+> **5주차 완료** (2026-11-20 기준): k6로 1,000명이 100장에 동시 예약하는 LOAD-01에서 **동기·비동기 모두 CONFIRMED 정확히 100건**을 확인했고, 50~500 RPS 단계별 성능을 같은 조건으로 비교했습니다 ([벤치마크 보고서](docs/benchmark-report.md)).
+> 다음은 6주차 Consumer 중단·재시작, Outbox 재발행, 재시도·DLT입니다.
 
 <br>
 
@@ -176,7 +176,7 @@ stateDiagram-v2
 - [ ] Consumer 장애 복구 (재시도·DLT)
 - [ ] Redis 요청 빈도 제한 (`429`)
 - [ ] 운영 지표 (확정 지연, 오류율, lag)
-- [ ] 동기 처리 비교 모드 (벤치마크용)
+- [x] 동기 처리 비교 모드 (벤치마크용)
 
 **P2 — 후순위**
 
@@ -247,6 +247,32 @@ UPDATE events
 
 <br>
 
+## 📊 벤치마크 요약
+
+> 로컬 단일 PC(Core Ultra 7 258V, 32GB, Docker Desktop) 측정값입니다. 조건과 한계는 [벤치마크 보고서](docs/benchmark-report.md)에 있습니다.
+
+**LOAD-01 — 티켓 100장, 고유 사용자 1,000명 동시 예약**
+
+| 방식 | CONFIRMED | 초과 판매 | 접수 p95 | 1,000건 결과 확정까지 |
+| --- | ---: | :---: | ---: | ---: |
+| 동기 DB 처리 | **100** | 0 | 3,333ms | 약 3.6초 |
+| Kafka 비동기 | **100** | 0 | 1,384ms | 약 7.6초 |
+
+**PERF-01 — 도착률별 접수 p95 / 결과 확정 p95**
+
+| RPS | 동기 접수 (= 확정) | 비동기 접수 | 비동기 확정 |
+| ---: | ---: | ---: | ---: |
+| 50 | 17ms | 9ms | 139ms |
+| 100 | 14ms | 9ms | 142ms |
+| 300 | 3,353ms (포화, 일부 요청 미발사) | 18ms | 9,999ms |
+| 500 | 5,008ms (포화) | 55ms | 28,394ms |
+
+- 공연 하나의 처리량 상한은 **두 방식 모두 초당 약 220건**입니다. 같은 재고 행을 순서대로 갱신해야 하기 때문이며, Kafka를 써도 늘지 않습니다.
+- 비동기 방식은 그 이상의 요청을 **접수 지연 없이 받아 두고** 확정을 뒤로 미룹니다. 동기 방식은 같은 대기를 HTTP 요청이 떠안습니다.
+- 스파이크에서는 동기 방식이 최종 결과를 더 빨리 냈습니다. **Kafka 방식이 항상 빠른 것은 아닙니다.**
+
+<br>
+
 ## 📁 프로젝트 구조
 
 ```text
@@ -282,9 +308,11 @@ ticketflow-kafka
 │   ├── compose.yml                # PostgreSQL · Kafka(KRaft) · Redis
 │   └── monitoring/                # Prometheus · Grafana (후순위)
 │
-├── load-tests/                    # k6 부하 테스트
+├── load-tests/                    # k6 부하 테스트 (Docker 이미지로 실행)
 │   ├── reservation-spike.js       # LOAD-01
-│   └── reservation-ramp.js        # PERF-01
+│   ├── reservation-ramp.js        # PERF-01
+│   ├── sql/result.sql             # 확정 지연·불변식 집계
+│   └── run.py                     # 실행기 (k6 + 풀 샘플링 + 집계)
 │
 ├── experiments/                   # 장애 재현 실험 기록
 │   ├── duplicate-event.md         # MSG-01
@@ -315,7 +343,7 @@ API, Outbox Relay, Consumer는 **하나의 Spring Boot 코드베이스**에서 �
 | 2 | 11/30 ~ 12/06 | 예약 테이블, 접수 API, 멱등성 키 | `202` + `QUEUED` | ✅ |
 | 3 | 12/07 ~ 12/13 | Outbox 트랜잭션, Relay, Kafka Consumer | 접수 → 이벤트 → 예약 완료 | ✅ |
 | 4 | 12/14 ~ 12/20 | 원자적 재고 감소, 중복 소비 방지 | 100장 초과 확정 없음 | ✅ |
-| 5 | 12/21 ~ 12/27 | k6 1,000명 시뮬레이션, 병목 분석 | 재고 불변식 + 성능 보고 | ⏳ |
+| 5 | 12/21 ~ 12/27 | k6 1,000명 시뮬레이션, 병목 분석 | 재고 불변식 + 성능 보고 | ✅ |
 | 6 | 12/28 ~ 01/03 | Consumer 중단·재시작, 중복 발행, DLT | 장애 복구 테스트 | ⏳ |
 | 7 | 01/04 ~ 01/10 | Redis 빈도 제한, 지표·모니터링 | 운영 관측 지표 | ⏳ |
 | 8 | 01/11 ~ 01/17 | 통합 테스트, CI, 시연 영상 | 재현 가능한 포트폴리오 | ⏳ |
