@@ -37,3 +37,7 @@ infrastructure/data/
 
 # --- Local tool settings ---
 .claude/
+
+# --- Python ---
+__pycache__/
+*.pyc

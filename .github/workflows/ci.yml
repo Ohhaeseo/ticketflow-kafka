@@ -1,0 +1,84 @@
+# TicketFlow CI (PRD DoD-5)
+# - backend: Testcontainers로 실제 Kafka·PostgreSQL·Redis를 띄워 통합 테스트 전체 실행
+# - config: Compose·Prometheus·Grafana·k6 설정이 깨지지 않았는지 검사
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend tests (Testcontainers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Pre-pull container images (same tags as compose.yml)
+        run: |
+          docker pull apache/kafka:4.3.2 &
+          docker pull postgres:18.7-alpine &
+          docker pull redis:8.8.4-alpine &
+          wait
+
+      - name: Test
+        run: ./gradlew test --no-daemon
+
+      - name: Upload test report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: backend-test-report
+          path: backend/build/reports/tests/test
+          retention-days: 7
+
+  config:
+    name: Infrastructure config
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Validate compose file (all profiles)
+        run: |
+          cp .env.example .env
+          docker compose -f infrastructure/compose.yml --env-file .env --profile monitoring config --quiet
+
+      - name: Validate Prometheus config
+        run: |
+          docker run --rm -v "$PWD/infrastructure/monitoring:/cfg:ro" --entrypoint promtool \
+            prom/prometheus:v3.15.1 check config /cfg/prometheus.yml
+
+      - name: Validate Grafana dashboard JSON
+        run: python3 -m json.tool infrastructure/monitoring/grafana/dashboards/ticketflow.json > /dev/null
+
+      - name: Check k6 scripts parse
+        run: |
+          for script in reservation-spike.js reservation-ramp.js; do
+            docker run --rm -v "$PWD/load-tests:/scripts:ro" grafana/k6:2.3.0 inspect "/scripts/$script" > /dev/null
+            echo "ok: $script"
+          done
+
+      - name: Check Python helpers compile
+        run: python3 -m py_compile load-tests/run.py experiments/crash_test.py
