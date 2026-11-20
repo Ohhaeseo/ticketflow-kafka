@@ -1,0 +1,49 @@
+# PERF-01 m-ackbatch-300
+scenario=stage users=1000 tickets=100 rate=300 duration=20s
+k6_wall_s=23.3 drain_after_k6_s=31.4
+hikari_max_active=10 hikari_max_pending=192 (samples=39)
+=== k6 summary ===
+RUN_LABEL=m-ackbatch-300
+TITLE=PERF-01 m-ackbatch-300
+EVENT_IDS=[126,127,128,129,130,131,132]
+reserve_requests=5585
+reserve_rps=254.0
+test_duration_s=22.0
+reserve_p50_ms=1489.1
+reserve_p95_ms=2367.8
+reserve_p99_ms=2474.5
+reserve_max_ms=3471.9
+accepted=5585
+status_409=0
+status_429=0
+status_4xx_other=0
+status_5xx=0
+network_errors=0
+error_rate_pct=0.0
+dropped_iterations=416
+max_vus=608
+--- reservations (M2 confirm latency = updated_at - created_at)
+ reservations | confirmed | sold_out | failed | queued | confirm_p50_ms | confirm_p95_ms | confirm_p99_ms | confirm_max_ms 
+--------------+-----------+----------+--------+--------+----------------+----------------+----------------+----------------
+         5585 |      5585 |        0 |      0 |      0 |        26293.8 |        32206.6 |        33114.5 |        33340.5
+
+--- stock invariant per event (PRD 12.3)
+ event_id | total_tickets | remaining_tickets | confirmed | invariant_ok 
+----------+---------------+-------------------+-----------+--------------
+      126 |          1000 |                 0 |      1000 | t
+      127 |          1000 |                 0 |      1000 | t
+      128 |          1000 |                 0 |      1000 | t
+      129 |          1000 |                 0 |      1000 | t
+      130 |          1000 |                 0 |      1000 | t
+      131 |          1000 |               415 |       585 | t
+      132 |          1000 |              1000 |         0 | t
+
+--- outbox (M7, async only)
+ outbox_rows | unpublished | publish_p95_ms | publish_max_ms 
+-------------+-------------+----------------+----------------
+        5585 |           0 |        13281.6 |        14003.6
+
+--- processing throughput (processed_messages)
+ processed | span_s | per_second 
+-----------+--------+------------
+      5585 |  53.26 |        105

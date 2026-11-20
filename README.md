@@ -17,7 +17,7 @@ Kafka 이벤트 기반 비동기 예약 · 동시성 제어 · 장애 대응 · 
 
 [![CI](https://github.com/Ohhaeseo/ticketflow-kafka/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohhaeseo/ticketflow-kafka/actions/workflows/ci.yml)
 ![Status](https://img.shields.io/badge/status-8_weeks_done-brightgreen?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-62_passed-success?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-67_passed-success?style=flat-square)
 ![Period](https://img.shields.io/badge/period-8_weeks-blue?style=flat-square)
 ![Cost](https://img.shields.io/badge/cost-%E2%82%A90-success?style=flat-square)
 
@@ -35,7 +35,7 @@ Kafka 이벤트 기반 비동기 예약 · 동시성 제어 · 장애 대응 · 
 | 같은 요청 10개 동시 전송 · 같은 Kafka 메시지 재전달 | 예약 1건, 재고 1회 감소 |
 | 부하 중 프로세스 강제 종료 4회 · Kafka 브로커 14초 중단 | **유실 0, 중복 반영 0** |
 | 같은 조건 동기 vs 비동기 (50~500 RPS) | 비동기는 접수 p95 55ms(500 RPS)로 버티지만, 공연 하나의 확정 처리량은 두 방식 모두 약 220건/s |
-| 자동 테스트 | Testcontainers 통합 테스트 62개, GitHub Actions에서 실행 |
+| 자동 테스트 | Testcontainers 통합·단위 테스트 67개, GitHub Actions에서 실행 |
 
 ### ✅ 완료 기준 (PRD DoD)
 
@@ -297,6 +297,7 @@ UPDATE events
 - 공연 하나의 처리량 상한은 **두 방식 모두 초당 약 220건**입니다. 같은 재고 행을 순서대로 갱신해야 하기 때문이며, Kafka를 써도 늘지 않습니다.
 - 비동기 방식은 그 이상의 요청을 **접수 지연 없이 받아 두고** 확정을 뒤로 미룹니다. 동기 방식은 같은 대기를 HTTP 요청이 떠안습니다.
 - 스파이크에서는 동기 방식이 최종 결과를 더 빨리 냈습니다. **Kafka 방식이 항상 빠른 것은 아닙니다.**
+- 이후 Consumer를 **배치 리스너**(poll 묶음 = DB 트랜잭션 1개, 오프셋 배치 커밋)로 바꿨습니다. 같은 조건에서 짝지어 비교했을 때 처리 속도 **+26~31%**, 확정 p95 약 절반이었습니다 ([측정 기록](docs/benchmark-report.md#consumer-처리량-개선-배치-리스너-2026-11-2021)).
 
 <br>
 

@@ -25,7 +25,7 @@ flowchart LR
 | 테스트용 사용자 식별 | ✅ | `X-Test-User-Id` 헤더, `local` 전용 (PRD Q4) |
 | Transactional Outbox | ✅ 3주차 | 예약과 같은 트랜잭션에 기록, `message_id`는 저장 시 생성 |
 | Outbox Relay | ✅ 3주차 | 100ms 폴링, 배치 200건, ack 후 `published_at` 갱신 |
-| Kafka Consumer | ✅ 3주차 | 동시성 3, 레코드 단위 오프셋 커밋, group `ticketflow-reservation` |
+| Kafka Consumer | ✅ 3주차 → 배치 리스너(11-21) | 동시성 3, group `ticketflow-reservation`. 기본은 배치 리스너(배치 트랜잭션, 실패 격리), `batch-enabled=false`로 레코드 모드 |
 | 원자적 재고 감소 | ✅ 3주차 | 예약 행 잠금 + 조건부 UPDATE. 중복 메시지는 상태 확인으로 건너뜀 |
 | `processed_messages` 중복 이력 | ✅ 4주차 | 같은 `message_id`는 건너뜀, 처리 결과(`outcome`) 기록 (MSG-01) |
 | 동시성·불변식 검증 | ✅ 4주차 | CON-02, 롤백(FR-INV-03), 100장/150명 동시 접수 → 정확히 100건 확정 |
@@ -131,7 +131,7 @@ sequenceDiagram
 | 토픽 복제 계수 | 1 | 로컬 단일 브로커 |
 | Producer `acks` / idempotence | `all` / `true` | 브로커 측 중복 위험 완화 |
 | Consumer 자동 커밋 | 꺼짐 | 오프셋 커밋은 Spring 컨테이너가 처리 후 수행 |
-| Listener ack-mode | `record` | 레코드 처리(DB 커밋)가 끝날 때마다 커밋 |
+| Listener 종류 / ack-mode | 배치 리스너 / `batch` (레코드 모드는 `record`) | poll 묶음 = DB 트랜잭션 1개, 오프셋 배치 커밋. 짝 비교에서 처리 +26~31% |
 | Outbox 폴링 주기 / 배치 크기 | 100ms / 200건 | 로컬 기준 접수 → 발행 지연 약 200ms 이내. 5주차 부하 테스트로 조정 |
 | Consumer 동시성 | 3 | 파티션 수와 같음 |
 | 재시도 횟수 / 간격 | 3회 / 200·400·800ms (blocking) | 파티션 안의 순서 유지. 영구 오류는 재시도 없이 DLT |

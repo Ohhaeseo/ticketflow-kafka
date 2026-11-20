@@ -27,6 +27,7 @@ cd backend
 - 기본 프로필은 `local`입니다. 공연 등록 API, Swagger UI, 테스트용 헤더 인증(`X-Test-User-Id`), 합성 사용자 시드가 켜집니다. 다른 프로필에서는 모두 꺼집니다.
 - DB·Kafka 접속 정보는 루트의 `.env`에서 읽습니다 (`spring.config.import: optional:file:../.env[.properties]`).
 - Compose 없이 Testcontainers로 인프라까지 띄우려면 `.\gradlew.bat bootTestRun`을 실행합니다.
+- Consumer는 기본으로 배치 리스너(poll 묶음 = DB 트랜잭션 1개)를 쓴다. 비교용 레코드 모드: `.\gradlew.bat bootRun --args='--ticketflow.consumer.batch-enabled=false'`
 - 벤치마크용 동기 처리 모드: `.\gradlew.bat bootRun --args='--ticketflow.reservation.processing-mode=sync'` (접수 응답 201 + 최종 상태, Outbox·Kafka 미사용)
 
 ## 테스트
@@ -61,7 +62,11 @@ Docker만 실행 중이면 됩니다. Testcontainers가 Compose와 같은 이미
 | `global/ratelimit/ReservationRateLimiterFailOpenTest` | **FR-RL-02** 단위 테스트: Redis 연결 불가 → 허용, 쿨다운 동안 Redis 미호출, 쿨다운 후 재시도 |
 | `monitoring/AdminApiIntegrationTest` | **FR-OPS-01·02·03**: 관리자 전용(403/401), 운영 지표 필드, DLT 조회, Prometheus 지표 노출 |
 
-총 62개. `@IntegrationTest`는 `@AutoConfigureMetrics`를 포함한다 (Spring Boot는 테스트에서 지표 내보내기를 기본으로 끈다). 동시성·중복 테스트는 반복 실행으로 결과가 흔들리지 않는 것을 확인했습니다. 재고 불변식 검사는 `support/StockInvariant`를 함께 씁니다.
+| `messaging/BatchListenerIsolationTest` | 배치 리스너 실패 격리: 배치 중간의 깨진 메시지만 DLT, 특정 레코드의 DB 오류가 계속되면 그 레코드만 재시도 후 DLT (나머지 확정) |
+| `messaging/RecordListenerModeIntegrationTest` | 비교용 레코드 모드(`batch-enabled=false`)가 ack-mode record로 동작 (별도 컨텍스트) |
+| `messaging/dlt/DeadLetterAuditListenerTest` | DLT 스택 트레이스에서 가장 깊은 원인 찾기 (단위) |
+
+총 67개. `@IntegrationTest`는 `@AutoConfigureMetrics`를 포함한다 (Spring Boot는 테스트에서 지표 내보내기를 기본으로 끈다). 동시성·중복 테스트는 반복 실행으로 결과가 흔들리지 않는 것을 확인했습니다. 재고 불변식 검사는 `support/StockInvariant`를 함께 씁니다.
 
 Relay와 Consumer는 테스트 중에도 백그라운드에서 돈다. 처리 로직만 따로 검증할 때는 Outbox 없이 예약을 직접 저장해(`ReservationCommandRepository`) Consumer가 끼어들지 않게 한다.
 

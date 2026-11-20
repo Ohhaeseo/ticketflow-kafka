@@ -1,0 +1,53 @@
+# PERF-01 m-ackbatch-500
+scenario=stage users=1000 tickets=100 rate=500 duration=20s
+k6_wall_s=24.5 drain_after_k6_s=36.0
+hikari_max_active=10 hikari_max_pending=191 (samples=14)
+=== k6 summary ===
+RUN_LABEL=m-ackbatch-500
+TITLE=PERF-01 m-ackbatch-500
+EVENT_IDS=[133,134,135,136,137,138,139,140,141,142,143]
+reserve_requests=6867
+reserve_rps=296.3
+test_duration_s=23.2
+reserve_p50_ms=3062.8
+reserve_p95_ms=3484.5
+reserve_p99_ms=3928.0
+reserve_max_ms=4728.3
+accepted=6867
+status_409=0
+status_429=0
+status_4xx_other=0
+status_5xx=0
+network_errors=0
+error_rate_pct=0.0
+dropped_iterations=3134
+max_vus=1000
+--- reservations (M2 confirm latency = updated_at - created_at)
+ reservations | confirmed | sold_out | failed | queued | confirm_p50_ms | confirm_p95_ms | confirm_p99_ms | confirm_max_ms 
+--------------+-----------+----------+--------+--------+----------------+----------------+----------------+----------------
+         6867 |      6867 |        0 |      0 |      0 |        26156.6 |        33454.5 |        36066.3 |        36461.1
+
+--- stock invariant per event (PRD 12.3)
+ event_id | total_tickets | remaining_tickets | confirmed | invariant_ok 
+----------+---------------+-------------------+-----------+--------------
+      133 |          1000 |                 0 |      1000 | t
+      134 |          1000 |                 0 |      1000 | t
+      135 |          1000 |                 0 |      1000 | t
+      136 |          1000 |                 0 |      1000 | t
+      137 |          1000 |                 0 |      1000 | t
+      138 |          1000 |                 0 |      1000 | t
+      139 |          1000 |               133 |       867 | t
+      140 |          1000 |              1000 |         0 | t
+      141 |          1000 |              1000 |         0 | t
+      142 |          1000 |              1000 |         0 | t
+      143 |          1000 |              1000 |         0 | t
+
+--- outbox (M7, async only)
+ outbox_rows | unpublished | publish_p95_ms | publish_max_ms 
+-------------+-------------+----------------+----------------
+        6867 |           0 |        12735.8 |        13360.6
+
+--- processing throughput (processed_messages)
+ processed | span_s | per_second 
+-----------+--------+------------
+      6867 |  59.33 |        116

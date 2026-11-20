@@ -50,8 +50,10 @@
 | --- | --- |
 | `kafka_dlt-original-topic` / `-partition` / `-offset` | `original_topic`, `original_partition`, `original_offset` (UNIQUE) |
 | `kafka_dlt-exception-fqcn` | `exception_class` (보통 `ListenerExecutionFailedException`) |
-| `kafka_dlt-exception-cause-fqcn` | `exception_cause_class` (실제 원인, 예: `tools.jackson...`, `NonRetryableMessageException`) |
-| `kafka_dlt-exception-message` | `exception_message` |
+| `kafka_dlt-exception-stacktrace`의 가장 깊은 `Caused by:` | `exception_cause_class`, `exception_message` (근본 원인, 예: `tools.jackson...`, `NonRetryableMessageException`, `PSQLException`) |
+| `kafka_dlt-exception-cause-fqcn` / `-message` | 스택 트레이스가 없을 때의 대체값 |
+
+배치 리스너에서는 예외가 `ListenerExecutionFailedException → BatchListenerFailedException → 실제 원인`으로 감싸진다. `-cause-fqcn` 헤더에는 바로 아래 한 단계(`BatchListenerFailedException`)만 담긴다. 그래서 스택 트레이스에서 근본 원인을 찾아 기록한다.
 
 감사 리스너는 전용 컨테이너 팩토리를 쓴다. 기록에 실패하면 재시도 후 로그만 남기고 DLT로 다시 보내지 않는다 (무한 루프 방지).
 
@@ -60,6 +62,19 @@
 SELECT received_at, original_partition, original_offset, exception_cause_class, exception_message, payload
   FROM dead_letter_messages ORDER BY received_at DESC LIMIT 20;
 ```
+
+### 배치 리스너 (기본값, 11-21)
+
+`ticketflow.consumer.batch-enabled=true`이면 `ReservationRequestedBatchListener`가 poll 묶음(최대 `max.poll.records`=500)을 **하나의 DB 트랜잭션**으로 처리하고, 오프셋은 배치마다 한 번 커밋한다 (`AckMode.BATCH`).
+
+| 상황 | 처리 |
+| --- | --- |
+| 배치 안에 파싱·검증 실패 레코드 | 그 앞까지 처리·커밋 → `BatchListenerFailedException(index)` → 오류 처리기가 앞쪽 오프셋 커밋, 실패 레코드는 (재시도 없이) DLT, 나머지는 다시 전달 |
+| 배치 트랜잭션 실패 (일시 오류, 특정 레코드의 DB 오류) | 한 건씩 각자의 트랜잭션으로 다시 처리 → 실패한 레코드만 `BatchListenerFailedException`으로 알림 → 그 레코드만 백오프 재시도 후 DLT |
+| 없는 예약 | 배치 커밋 후 해당 index를 DLT로. 뒤 레코드는 다시 전달돼도 `processed_messages`로 건너뜀 |
+| 같은 배치에 같은 `message_id` 두 번 | 앞 처리 이력이 같은 트랜잭션 안에서 보이므로 한 번만 적용 |
+
+`false`로 두면 레코드 리스너(`ReservationRequestedListener`, 3~7주차 방식)로 돌아간다. 처리량 비교는 [benchmark-report.md](benchmark-report.md#consumer-처리량-개선-배치-리스너-2026-11-2021) 참고.
 
 ### Consumer 그룹 멤버십
 
@@ -77,7 +92,7 @@ SELECT received_at, original_partition, original_offset, exception_cause_class, 
 | Consumer | `group.id` | `ticketflow-reservation` |
 | Consumer | `auto.offset.reset` | `earliest` |
 | Consumer | `enable.auto.commit` | `false` |
-| Listener | `ack-mode` | `record` — 레코드 처리(DB 커밋)가 끝난 뒤 오프셋 커밋 |
+| Listener | 종류 / `ack-mode` | 배치 리스너 / `batch` — 배치 처리(DB 커밋)가 끝난 뒤 오프셋 한 번 커밋. 레코드 모드(`batch-enabled=false`)는 `record` |
 | Listener | `concurrency` | `3` (파티션 수와 같음) |
 
 - 애플리케이션의 kafka-clients는 4.2.2, 브로커는 4.3.2다.
