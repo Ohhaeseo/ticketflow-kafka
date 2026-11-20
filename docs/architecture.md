@@ -3,7 +3,7 @@
 > 요구사항 기준: [PRD §8 시스템 아키텍처](../prd.md#8-시스템-아키텍처). 이 문서는 **구현된 결과**를 주차별로 기록합니다.
 > 설계 결정의 이유는 [ADR-0001](adr/0001-why-kafka.md)에 있습니다.
 
-## 현재 구현 상태 (6주차 완료)
+## 현재 구현 상태 (7주차 완료)
 
 ```mermaid
 flowchart LR
@@ -32,6 +32,9 @@ flowchart LR
 | 재시도 · DLT | ✅ 6주차 | 일시 오류 3회 백오프 재시도, 영구 오류 즉시 DLT, `dead_letter_messages` 감사 이력 |
 | 정적 멤버십 | ✅ 6주차 | 강제 종료 후 재시작 시 파티션 즉시 재할당 (45초 정지 해소) |
 | 장애 실험 | ✅ 6주차 | 프로세스 강제 종료 4회, Kafka 브로커 14초 중단 → 유실·중복 반영 0 |
+| Redis 빈도 제한 | ✅ 7주차 | 사용자별 10초 20회, Lua INCR+PEXPIRE, fail-open + 5초 차단기 |
+| 운영 지표 · 관리자 API | ✅ 7주차 | lag·Outbox·DLT gauge, 처리 결과 카운터, `/admin/metrics`, `/admin/dlt` ([monitoring.md](monitoring.md)) |
+| Prometheus · Grafana | ✅ 7주차 | Compose `monitoring` 프로필, 대시보드 프로비저닝 |
 | Redis 빈도 제한 | ⏳ 7주차 | |
 
 ## 목표 구성도
@@ -132,3 +135,5 @@ sequenceDiagram
 | Consumer 동시성 | 3 | 파티션 수와 같음 |
 | 재시도 횟수 / 간격 | 3회 / 200·400·800ms (blocking) | 파티션 안의 순서 유지. 영구 오류는 재시도 없이 DLT |
 | Consumer `group.instance.id` | `ticketflow-local-1` (+`-0/-1/-2`) | 정적 멤버십. 강제 종료 후 45초 정지 해소 |
+| 빈도 제한 | 사용자별 10초 20회, Redis timeout 500ms / 연결 1s, 실패 후 5초 차단 | 반복 요청 억제. Redis 장애에도 예약은 계속 |
+| 지표 갱신 주기 | 5초 | lag·Outbox·DLT gauge를 미리 계산해 Prometheus 수집 비용 고정 |

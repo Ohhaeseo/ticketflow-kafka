@@ -35,7 +35,7 @@ cd backend
 .\gradlew.bat test
 ```
 
-Docker만 실행 중이면 됩니다. Testcontainers가 Compose와 같은 이미지 태그(`apache/kafka:4.3.2`, `postgres:18.7-alpine`)로 컨테이너를 띄우고, 모든 통합 테스트가 하나의 Spring 컨텍스트와 컨테이너를 공유합니다 (`@IntegrationTest`).
+Docker만 실행 중이면 됩니다. Testcontainers가 Compose와 같은 이미지 태그(`apache/kafka:4.3.2`, `postgres:18.7-alpine`, `redis:8.8.4-alpine`)로 컨테이너를 띄우고, 모든 통합 테스트가 하나의 Spring 컨텍스트와 컨테이너를 공유합니다 (`@IntegrationTest`).
 
 | 테스트 | 검증 내용 |
 | --- | --- |
@@ -55,8 +55,11 @@ Docker만 실행 중이면 됩니다. Testcontainers가 Compose와 같은 이미
 | `messaging/DeadLetterIntegrationTest` | **MSG-04**: 깨진 JSON·schemaVersion 99·없는 예약 → DLT + 감사 이력. **FR-CSM-03**: 트리거로 2번 실패 주입 → 백오프 재시도 후 성공, DLT 없음 |
 | `messaging/ConsumerRestartIntegrationTest` | **MSG-02**: 리스너 컨테이너를 멈춘 사이 8건 접수 → 재시작 후 확정 5, 매진 3 |
 | `outbox/OutboxRepublishIntegrationTest` | **MSG-03**: `published_at`을 되돌려 재발행 → Kafka에 같은 messageId 2번, 재고는 1번 감소 |
+| `reservation/RateLimitIntegrationTest` | **SEC-01**: 같은 사용자 22회 → 202 1, 409 19, 429 2 (`Retry-After`), 다른 사용자는 영향 없음 |
+| `global/ratelimit/ReservationRateLimiterFailOpenTest` | **FR-RL-02** 단위 테스트: Redis 연결 불가 → 허용, 쿨다운 동안 Redis 미호출, 쿨다운 후 재시도 |
+| `monitoring/AdminApiIntegrationTest` | **FR-OPS-01·02·03**: 관리자 전용(403/401), 운영 지표 필드, DLT 조회, Prometheus 지표 노출 |
 
-총 54개. 동시성·중복 테스트는 반복 실행으로 결과가 흔들리지 않는 것을 확인했습니다. 재고 불변식 검사는 `support/StockInvariant`를 함께 씁니다.
+총 62개. `@IntegrationTest`는 `@AutoConfigureMetrics`를 포함한다 (Spring Boot는 테스트에서 지표 내보내기를 기본으로 끈다). 동시성·중복 테스트는 반복 실행으로 결과가 흔들리지 않는 것을 확인했습니다. 재고 불변식 검사는 `support/StockInvariant`를 함께 씁니다.
 
 Relay와 Consumer는 테스트 중에도 백그라운드에서 돈다. 처리 로직만 따로 검증할 때는 Outbox 없이 예약을 직접 저장해(`ReservationCommandRepository`) Consumer가 끼어들지 않게 한다.
 
@@ -70,8 +73,8 @@ Relay와 Consumer는 테스트 중에도 백그라운드에서 돈다. 처리 �
 | `user` | 테스트용 합성 사용자 (local 시드 1~1000) | ✅ 2주차 |
 | `outbox` | Outbox 행·저장소, Relay(Poller) | ✅ 3주차 |
 | `messaging` | Kafka 토픽·오류 처리 설정, 메시지 DTO, Outbox 기록(`producer`), Listener(`consumer`), DLT 감사(`dlt`) | ✅ 3·6주차 |
-| `monitoring` | 관리자 지표 API, 커스텀 Micrometer 지표 | 7주차 |
-| `global` | 공통 설정(OpenAPI, Clock), 예외 처리, 오류 응답 형식, 테스트용 헤더 인증(`auth`) | ✅ 1~2주차 |
+| `monitoring` | 관리자 지표·DLT API, Consumer lag 계산, 운영 gauge | ✅ 7주차 |
+| `global` | 공통 설정(OpenAPI, Clock), 예외 처리, 오류 응답 형식, 테스트용 헤더 인증(`auth`), 빈도 제한(`ratelimit`) | ✅ 1~2·7주차 |
 
 ## 테스트 구조
 
@@ -80,7 +83,8 @@ Relay와 Consumer는 테스트 중에도 백그라운드에서 돈다. 처리 �
 | `test/.../support` | Testcontainers 공통 설정, `@IntegrationTest` |
 | `test/.../event` | 공연 API, DB 제약 |
 | `test/.../messaging` | Kafka 연결·group id, MSG-01, MSG-02, MSG-04, 재시도 ✅ |
-| `test/.../reservation` | 예약 API, CON-01, CON-02, 처리 로직·롤백, E2E, 초과 판매 방지 ✅ · SEC-01 (7주차) |
+| `test/.../reservation` | 예약 API, CON-01, CON-02, 처리 로직·롤백, E2E, 초과 판매 방지, SEC-01 ✅ |
+| `test/.../monitoring` | 관리자 API, Prometheus 지표 ✅ |
 | `test/.../outbox` | Outbox 기록·발행, MSG-03 재발행 ✅ |
 
 ## Flyway 마이그레이션

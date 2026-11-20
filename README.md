@@ -15,8 +15,8 @@ Kafka 이벤트 기반 비동기 예약 · 동시성 제어 · 장애 대응 · 
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-FF4438?style=for-the-badge&logo=redis&logoColor=white)
 
-![Status](https://img.shields.io/badge/status-week_6_done-brightgreen?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-54_passed-success?style=flat-square)
+![Status](https://img.shields.io/badge/status-week_7_done-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-62_passed-success?style=flat-square)
 ![Period](https://img.shields.io/badge/period-8_weeks-blue?style=flat-square)
 ![Cost](https://img.shields.io/badge/cost-%E2%82%A90-success?style=flat-square)
 
@@ -27,8 +27,8 @@ Kafka 이벤트 기반 비동기 예약 · 동시성 제어 · 장애 대응 · 
 <br>
 
 > [!NOTE]
-> **6주차 완료** (2026-11-20 기준): 재시도·DLT를 붙이고, 부하 중 프로세스 강제 종료(4회)와 Kafka 브로커 중단을 실험했습니다. **모든 경우 유실 0, 중복 반영 0**이었고, 실험 중 발견한 "강제 종료 후 45초 처리 정지"를 정적 멤버십으로 고쳤습니다 ([장애 대응](#-장애-대응)).
-> 다음은 7주차 Redis 요청 빈도 제한과 운영 지표·모니터링입니다.
+> **7주차 완료** (2026-11-20 기준): Redis 기반 사용자별 예약 시도 제한(429, Redis 장애 시 fail-open), 운영 지표(Consumer lag·Outbox 미발행·DLT), 관리자 API, Prometheus + Grafana 대시보드를 추가했습니다 ([모니터링](docs/monitoring.md)).
+> 다음은 8주차 CI(GitHub Actions)와 최종 정리입니다.
 
 <br>
 
@@ -147,7 +147,7 @@ stateDiagram-v2
 | **Infra** | ![Docker](https://img.shields.io/badge/Docker_Compose-2496ED?style=flat-square&logo=docker&logoColor=white) ![WSL2](https://img.shields.io/badge/WSL2-0078D4?style=flat-square&logo=linux&logoColor=white) | 로컬 단일 실행 환경 |
 | **Test** | ![JUnit5](https://img.shields.io/badge/JUnit_5-25A162?style=flat-square&logo=junit5&logoColor=white) ![Testcontainers](https://img.shields.io/badge/Testcontainers-291A3F?style=flat-square) | 실제 Kafka·PostgreSQL 통합 테스트 |
 | **Performance** | ![k6](https://img.shields.io/badge/k6-7D64FF?style=flat-square&logo=k6&logoColor=white) ![Micrometer](https://img.shields.io/badge/Actuator_·_Micrometer-6DB33F?style=flat-square&logo=spring&logoColor=white) | 부하 생성, p95·오류율·lag 측정 |
-| **Monitoring** <sub>(후순위)</sub> | ![Prometheus](https://img.shields.io/badge/Prometheus-E6522C?style=flat-square&logo=prometheus&logoColor=white) ![Grafana](https://img.shields.io/badge/Grafana-F46800?style=flat-square&logo=grafana&logoColor=white) | 지표 수집·시각화 |
+| **Monitoring** | ![Prometheus](https://img.shields.io/badge/Prometheus-E6522C?style=flat-square&logo=prometheus&logoColor=white) ![Grafana](https://img.shields.io/badge/Grafana-F46800?style=flat-square&logo=grafana&logoColor=white) | 지표 수집·시각화 |
 | **Docs · CI** | ![Swagger](https://img.shields.io/badge/Swagger-85EA2D?style=flat-square&logo=swagger&logoColor=black) ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-2088FF?style=flat-square&logo=githubactions&logoColor=white) | API 문서, 자동 테스트 |
 
 <br>
@@ -174,14 +174,14 @@ stateDiagram-v2
 **P1 — 안정성·운영**
 
 - [x] Consumer 장애 복구 (재시도·DLT)
-- [ ] Redis 요청 빈도 제한 (`429`)
-- [ ] 운영 지표 (확정 지연, 오류율, lag)
+- [x] Redis 요청 빈도 제한 (`429`)
+- [x] 운영 지표 (확정 지연, 오류율, lag)
 - [x] 동기 처리 비교 모드 (벤치마크용)
 
 **P2 — 후순위**
 
-- [ ] DLT 조회 API
-- [ ] Prometheus + Grafana 대시보드
+- [x] DLT 조회 API
+- [x] Prometheus + Grafana 대시보드
 
 </td>
 </tr>
@@ -280,7 +280,8 @@ UPDATE events
 | **애플리케이션 강제 종료** | 커밋 전 접수는 롤백되고 클라이언트는 오류를 받는다. 커밋된 접수는 재시작 후 처리. 재전달·재발행 메시지는 `processed_messages`로 건너뜀 | 부하 중 `taskkill /F` 4회: 유실 0, 중복 반영 0, 재시작 후 3.9~9초에 처리 완료 | 재시작만 하면 된다. 클라이언트는 같은 `Idempotency-Key`로 재시도 |
 | **Kafka 브로커 중단** | 접수는 계속 `202` (DB만 씀). 이벤트는 Outbox에 쌓였다가 브로커 복구 후 발행 | 14초 중단 중 30건 접수 → 복구 4.5초 후 전부 처리, 중복 0 | 브로커 복구. Outbox 미발행 건수 확인 |
 | **처리 중 일시 오류** (DB 연결 등) | 같은 파티션 안에서 200·400·800ms 백오프로 3번 재시도. 실패마다 재고·상태 롤백 | 2번 실패 후 성공, 재고 1회만 감소 | 없음. 계속 실패하면 DLT로 이동 |
-| **처리할 수 없는 메시지** (깨진 JSON, 스키마 불일치, 없는 예약) | 재시도 없이 DLT로 이동, `dead_letter_messages`에 원본·예외 기록 | 3가지 모두 DLT 이동, 감사 이력 남음 | `dead_letter_messages`에서 원인 확인 후 조치 |
+| **처리할 수 없는 메시지** (깨진 JSON, 스키마 불일치, 없는 예약) | 재시도 없이 DLT로 이동, `dead_letter_messages`에 원본·예외 기록 | 3가지 모두 DLT 이동, 감사 이력 남음 | `GET /api/v1/admin/dlt`로 원인 확인 후 조치 |
+| **Redis 중단** | 빈도 제한만 꺼지고(fail-open) 예약은 계속 받는다. 첫 실패 후 5초 동안은 Redis를 부르지 않음. 헬스는 `UP` 유지 | 중단 중 6건 모두 `202` (첫 요청 0.5초, 이후 15~23ms), 복구 후 제한 재개 | Redis 복구. Grafana의 fail-open 패널 확인 |
 | **같은 메시지 재전달** | 예약 행 잠금 → `processed_messages` 확인 → 건너뜀 | 재고·이력 변화 없음 | 없음 |
 
 **실험에서 발견해 고친 문제:** 강제 종료된 Consumer는 그룹 탈퇴 요청을 보내지 못해서, 재시작한 앱이 `session.timeout.ms`(45초) 동안 파티션을 받지 못했습니다. Consumer 정적 멤버십(`group.instance.id`)을 설정해 재시작 즉시 파티션을 돌려받게 했습니다 (재시작 후 처리 완료 41.3초 → 3.9~9초).
@@ -321,8 +322,8 @@ ticketflow-kafka
 │           └── support/           # Testcontainers 공통 설정
 │
 ├── infrastructure/
-│   ├── compose.yml                # PostgreSQL · Kafka(KRaft) · Redis
-│   └── monitoring/                # Prometheus · Grafana (후순위)
+│   ├── compose.yml                # PostgreSQL · Kafka(KRaft) · Redis (+ monitoring 프로필)
+│   └── monitoring/                # Prometheus 설정, Grafana 프로비저닝·대시보드
 │
 ├── load-tests/                    # k6 부하 테스트 (Docker 이미지로 실행)
 │   ├── reservation-spike.js       # LOAD-01
@@ -362,7 +363,7 @@ API, Outbox Relay, Consumer는 **하나의 Spring Boot 코드베이스**에서 �
 | 4 | 12/14 ~ 12/20 | 원자적 재고 감소, 중복 소비 방지 | 100장 초과 확정 없음 | ✅ |
 | 5 | 12/21 ~ 12/27 | k6 1,000명 시뮬레이션, 병목 분석 | 재고 불변식 + 성능 보고 | ✅ |
 | 6 | 12/28 ~ 01/03 | Consumer 중단·재시작, 중복 발행, DLT | 장애 복구 테스트 | ✅ |
-| 7 | 01/04 ~ 01/10 | Redis 빈도 제한, 지표·모니터링 | 운영 관측 지표 | ⏳ |
+| 7 | 01/04 ~ 01/10 | Redis 빈도 제한, 지표·모니터링 | 운영 관측 지표 | ✅ |
 | 8 | 01/11 ~ 01/17 | 통합 테스트, CI, 시연 영상 | 재현 가능한 포트폴리오 | ⏳ |
 
 <br>
@@ -389,6 +390,15 @@ docker compose -f infrastructure/compose.yml --env-file .env up -d --wait
 | --- | --- | --- | --- |
 | PostgreSQL | `postgres:18.7-alpine` | `127.0.0.1:15432` | PC에 설치된 PostgreSQL(5432)과 겹치지 않게 15432 사용 |
 | Kafka (KRaft) | `apache/kafka:4.3.2` | `127.0.0.1:9092` | 단일 노드, 토픽 자동 생성 꺼짐 |
+| Redis | `redis:8.8.4-alpine` | `127.0.0.1:16379` | 예약 시도 빈도 제한 전용 |
+| Prometheus *(선택)* | `prom/prometheus:v3.15.1` | `127.0.0.1:9090` | `--profile monitoring` |
+| Grafana *(선택)* | `grafana/grafana:13.2.6` | `127.0.0.1:3000` | `--profile monitoring`, 대시보드 자동 등록 |
+
+모니터링까지 띄우려면 `--profile monitoring`을 붙입니다. 지표 설명은 [docs/monitoring.md](docs/monitoring.md)에 있습니다.
+
+```powershell
+docker compose -f infrastructure/compose.yml --env-file .env --profile monitoring up -d --wait
+```
 
 ### 3. 애플리케이션 실행
 
@@ -401,6 +411,8 @@ cd backend
 | --- | --- |
 | 헬스 체크 | http://localhost:8080/actuator/health |
 | Swagger UI | http://localhost:8080/swagger-ui/index.html |
+| Grafana 대시보드 | http://localhost:3000 (`--profile monitoring`) |
+| 운영 지표 API | `GET /api/v1/admin/metrics` (헤더 `X-Test-User-Role: ADMIN`) |
 
 기동하면 Flyway가 스키마를 만들고, Kafka에 `reservation.requested.v1`과 `-dlt` 토픽(파티션 3)이 생성됩니다. Outbox Relay(100ms 폴링)와 Consumer(동시성 3)도 같은 프로세스에서 함께 뜹니다.
 
@@ -467,6 +479,7 @@ docker compose -f infrastructure/compose.yml --env-file .env down
 | [docs/event-contract.md](docs/event-contract.md) | Kafka 토픽·메시지 스키마 |
 | [docs/api-spec.md](docs/api-spec.md) | REST API 명세 |
 | [docs/benchmark-report.md](docs/benchmark-report.md) | 동기 vs 비동기 벤치마크 결과 |
+| [docs/monitoring.md](docs/monitoring.md) | 운영 지표, Grafana 대시보드, 장애 신호별 확인 방법 |
 | [docs/adr/](docs/adr/) | 아키텍처 결정 기록 (ADR) |
 | [experiments/](experiments/) | 장애 재현 실험 기록 |
 

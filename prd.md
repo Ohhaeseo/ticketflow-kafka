@@ -8,7 +8,7 @@
 | 개발 기간 | 2026-11-23 ~ 2027-01-17 (8주) |
 | 개발 환경 | Windows 11 + WSL2 + Docker Desktop, RAM 32GB 이상, GPU 불필요 |
 | 예산 | 서비스 비용 0원 (로컬 오픈소스만 사용, 전기료 제외) |
-| 상태 | 진행 중 — 6주차 구현 완료. 남은 미결 사항은 [§18](#18-미결-사항-open-questions) 참고 |
+| 상태 | 진행 중 — 7주차 구현 완료. 미결 사항 Q1~Q7 모두 결정 |
 
 ---
 
@@ -697,7 +697,7 @@ ticketflow-kafka/
 | Q2 | 같은 사용자·같은 행사에 **다른 키**로 요청하면? | ✅ **결정:** 409 `RESERVATION_ALREADY_EXISTS` + 기존 `reservationId` | 2주차 |
 | Q3 | 판매 기간 안에 접수됐지만 종료 후 소비된 메시지는? | ✅ **결정:** `FAILED` + `failure_reason=SALES_CLOSED`, 재고는 줄이지 않음. 재고가 0이면 판매 기간과 관계없이 `SOLD_OUT` | 3주차 |
 | Q4 | MVP 사용자 식별 방식은? | ✅ **결정:** `X-Test-User-Id` 헤더(관리자는 `X-Test-User-Role: ADMIN`). `ticketflow.test-auth.enabled`가 켜진 `local` 프로필에서만 동작하고, 꺼져 있으면 401. 합성 사용자 1~1000은 local 전용 시드 | 2주차 |
-| Q5 | Redis 장애 시 빈도 제한 정책은? | fail-open (요청 허용 + 경고 지표) | 7주차 |
+| Q5 | Redis 장애 시 빈도 제한 정책은? | ✅ **결정:** fail-open (요청 허용 + `ticketflow_ratelimit_fail_open_total` 지표). 첫 실패 후 5초 동안 Redis 호출 생략. Redis는 헬스 체크에서 제외 | 7주차 |
 | Q6 | 토픽 파티션 수는? | ✅ **결정:** 3, Consumer 동시성 3 (핫 파티션 특성상 행사 하나의 처리량은 늘지 않음을 보고서에 명시) | 3주차 |
 | Q7 | Outbox `payload` 타입은 `text`와 `jsonb` 중 무엇으로? | ✅ **결정:** `text`. 조회 필요가 생기면 `jsonb` 전환 | 3주차 |
 
@@ -749,3 +749,5 @@ ticketflow-kafka/
 | A12 | Consumer 처리 순서에 예약 행 잠금이 없음 | `SELECT ... FOR UPDATE`로 예약 행을 잠근 뒤 상태 확인 (3주차) | 같은 예약의 중복 메시지가 동시에 처리되어도 재고 감소가 한 번만 일어남 |
 | A13 | "DLT 이동, 감사 이력 유지"의 저장 위치가 없음 | `dead_letter_messages` 테이블 + DLT 감사 리스너 (6주차) | DLT 토픽은 보존 기간이 지나면 사라짐. 운영자가 SQL·API로 원인을 바로 확인 |
 | A14 | Consumer 재시작 시간에 대한 요구 없음 | 정적 멤버십 `group.instance.id` (6주차) | 강제 종료 후 `session.timeout.ms`(45초) 동안 처리가 멈추는 것을 실험에서 확인. 설정 후 재시작 즉시 재할당 |
+| A15 | Redis 장애가 헬스 체크에 주는 영향 미정 | Redis를 `/actuator/health`에서 제외 (7주차) | 빈도 제한은 fail-open인 부가 기능. Redis 장애로 앱이 DOWN 판정(재시작 대상)되면 예약 접수까지 멈춘다 |
+| A16 | Prometheus 수집마다 DB·Kafka 조회 가능성 | lag·Outbox·DLT gauge를 5초마다 미리 계산 (7주차) | 수집 주기와 무관하게 조회 비용 고정 |

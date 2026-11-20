@@ -110,6 +110,7 @@ Location: /api/v1/reservations/1
 | `200` | 같은 사용자·같은 키·같은 본문 재요청 (Q1) |
 | `400 INVALID_REQUEST` | `eventId` 누락, JSON 오류, `Idempotency-Key` 헤더 누락 |
 | `400 INVALID_IDEMPOTENCY_KEY` | 키가 1~100자의 `[A-Za-z0-9._:-]`가 아님 |
+| `429 RATE_LIMITED` | 사용자별 시도 한도 초과 (업무 검증보다 먼저 검사) |
 | `401 UNAUTHENTICATED` | 사용자 식별 실패, 미등록 사용자 |
 | `404 EVENT_NOT_FOUND` | 공연 없음 |
 | `409 IDEMPOTENCY_KEY_REUSED` | 같은 키로 다른 본문(다른 `eventId`) |
@@ -124,11 +125,53 @@ Location: /api/v1/reservations/1
 
 본인 예약을 최근 접수 순(`reservationId` 내림차순)으로 반환한다.
 
-## 관리자 — 7주차 예정
+## 관리자 — 7주차 ✅
 
-### `GET /admin/metrics`
+헤더 `X-Test-User-Role: ADMIN`이 있어야 합니다. 없으면 `403 FORBIDDEN`입니다 (사용자 헤더 자체가 없으면 401).
 
-### `GET /admin/dlt`
+### `GET /admin/metrics` — 운영 지표 (FR-OPS-01)
+
+```json
+{
+  "generatedAt": "2026-11-20T14:22:31.112Z",
+  "reservationsByStatus": { "QUEUED": 0, "CONFIRMED": 39408, "SOLD_OUT": 3303, "FAILED": 0 },
+  "outbox": { "unpublished": 0, "oldestUnpublishedAgeMs": 0 },
+  "consumerLag": { "groupId": "ticketflow-reservation", "topic": "reservation.requested.v1", "total": 0, "byPartition": { "0": 0, "1": 0, "2": 0 } },
+  "deadLetters": { "total": 0, "last24h": 0 },
+  "recentEvents": [
+    { "eventId": 72, "title": "Open Concert", "totalTickets": 100, "remainingTickets": 0,
+      "confirmed": 100, "soldOut": 900, "failed": 0, "queued": 0, "invariantOk": true }
+  ]
+}
+```
+
+- `consumerLag.total`이 `-1`이면 Kafka에서 계산하지 못한 것입니다 (브로커 장애 등).
+- `recentEvents`는 최근 공연 20개이며, `invariantOk`는 PRD §12.3 재고 불변식 결과입니다.
+
+### `GET /admin/dlt?limit=20` — DLT 메시지 (FR-OPS-02)
+
+최근에 DLT로 이동한 메시지를 원본 위치·내용·실패 원인과 함께 반환합니다. `limit`은 1~200입니다.
+
+```json
+[
+  { "id": 3, "originalTopic": "reservation.requested.v1", "originalPartition": 1, "originalOffset": 52,
+    "messageKey": "dlt-test", "payload": "{not-json ...", "exceptionCauseClass": "tools.jackson.core.exc.StreamReadException",
+    "exceptionMessage": "Unexpected character ...", "receivedAt": "2026-11-20T14:02:11.501Z" }
+]
+```
+
+## 요청 빈도 제한 (7주차 ✅)
+
+`POST /reservations`는 사용자별로 **첫 시도부터 10초 동안 20회**까지 허용합니다 (`ticketflow.rate-limit.reservation.*`). 실패한 시도(409 등)도 셉니다.
+
+```http
+HTTP/1.1 429 Too Many Requests
+Retry-After: 9
+
+{ "code": "RATE_LIMITED", "message": "예약 시도가 너무 잦습니다. 잠시 후 다시 시도하세요.", "errors": [] }
+```
+
+Redis에 연결할 수 없으면 제한 없이 허용합니다 (fail-open, PRD Q5).
 
 ## 오류 응답
 
@@ -150,9 +193,11 @@ Location: /api/v1/reservations/1
 | 400 | `INVALID_SALES_PERIOD` | 공연 등록 시 판매 시작 시각이 종료 시각보다 늦거나 같음 |
 | 400 | `INVALID_IDEMPOTENCY_KEY` | 멱등성 키 형식 오류 |
 | 401 | `UNAUTHENTICATED` | 사용자 식별 실패 |
+| 403 | `FORBIDDEN` | 관리자 API를 관리자가 아닌 사용자가 호출 |
 | 404 | `EVENT_NOT_FOUND` | 공연 없음 |
 | 404 | `RESERVATION_NOT_FOUND` | 예약 없음 또는 다른 사용자의 예약 |
 | 409 | `IDEMPOTENCY_KEY_REUSED` | 같은 키·다른 본문 |
 | 409 | `RESERVATION_ALREADY_EXISTS` | 같은 공연 중복 예약 |
 | 422 | `SALES_NOT_STARTED` | 판매 시작 전 |
 | 422 | `SALES_ENDED` | 판매 종료 후 |
+| 429 | `RATE_LIMITED` | 사용자별 예약 시도 한도 초과. `Retry-After` 헤더(초) |
