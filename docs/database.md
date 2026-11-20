@@ -11,6 +11,7 @@
 | R | `db/seed/R__seed_test_users.sql` | 합성 사용자 1~1000 (**local 프로필 전용**) | 2주 ✅ |
 | V3 | `db/migration/V3__create_outbox_events.sql` | `outbox_events`, 미발행 부분 인덱스 | 3주 ✅ |
 | V4 | `db/migration/V4__create_processed_messages.sql` | `processed_messages` (처리 결과 `outcome` 포함) | 4주 ✅ |
+| V5 | `db/migration/V5__create_dead_letter_messages.sql` | `dead_letter_messages` (DLT 감사 이력) | 6주 ✅ |
 
 - 마이그레이션 위치: `backend/src/main/resources/db/migration/`. 시드는 `db/seed/`에 두고 `local` 프로필에서만 Flyway 위치에 추가한다 (`spring.flyway.locations`).
 - 시드는 반복 실행(repeatable) 마이그레이션이며 `ON CONFLICT DO NOTHING`이라 여러 번 실행해도 결과가 같다.
@@ -110,6 +111,19 @@ RETURNING id;
 - 원본 PRD 컬럼에 `outcome`을 더했다. 어떤 메시지가 어떤 결과를 냈는지 운영자가 추적할 수 있게 하려는 것이다.
 - 같은 `message_id`가 다시 오면 이 테이블을 보고 건너뛴다. 이때는 이력을 더 남기지 않는다 (PK).
 - 처리 트랜잭션이 롤백되면 이력도 함께 사라지므로, 실패한 메시지는 재전달 시 다시 처리된다.
+
+### `dead_letter_messages`
+
+| 컬럼 | 타입 | 제약 |
+| --- | --- | --- |
+| `id` | `BIGINT` | PK |
+| `original_topic`, `original_partition`, `original_offset` | `VARCHAR(200)`, `INTEGER`, `BIGINT` | NOT NULL, UNIQUE 묶음 (같은 원본은 한 번만 기록) |
+| `message_key`, `payload` | `VARCHAR(200)`, `TEXT` | 원본 그대로 (깨진 JSON도 보존) |
+| `exception_class`, `exception_cause_class`, `exception_message` | `VARCHAR(300)`, `VARCHAR(300)`, `TEXT` | DLT 헤더에서 옮김 |
+| `dlt_partition`, `dlt_offset` | `INTEGER`, `BIGINT` | DLT 토픽에서의 위치 |
+| `received_at` | `TIMESTAMPTZ` | NOT NULL, 인덱스 |
+
+FK가 없는 것은 의도한 설계다. 깨진 메시지는 어떤 예약에도 연결되지 않을 수 있다.
 
 ## Consumer 처리 쿼리 (3~4주차 ✅)
 

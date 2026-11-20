@@ -1,0 +1,52 @@
+# crash experiment crash-midload (PERF-01 crash-midload)
+scenario=stage kill_at=8.5s killed_pid=17296
+before_kill: reservations=1980 queued=1555 confirmed=425 unpublished_outbox=18
+after_kill:  reservations=2202 queued=1736 confirmed=466 unpublished_outbox=58
+restart_to_healthy_s=10.3 drain_after_restart_s=9.0
+after_restart_log: duplicate_message_skipped=1 reservation_already_final=0
+=== k6 summary ===
+RUN_LABEL=crash-midload
+TITLE=PERF-01 crash-midload
+EVENT_IDS=[60,61,62,63]
+reserve_requests=3000
+reserve_rps=292.2
+test_duration_s=10.3
+reserve_p50_ms=10.2
+reserve_p95_ms=797.2
+reserve_p99_ms=820.8
+reserve_max_ms=1412.7
+accepted=2202
+status_409=0
+status_429=0
+status_4xx_other=0
+status_5xx=0
+network_errors=798
+error_rate_pct=26.6
+dropped_iterations=0
+max_vus=300
+--- exactly-once check
+ reservations | still_queued | processing_records | skipped_records | applied_twice | never_applied 
+--------------+--------------+--------------------+-----------------+---------------+---------------
+         2202 |            0 |               2202 |               0 |             0 |             0
+--- reservations (M2 confirm latency = updated_at - created_at)
+ reservations | confirmed | sold_out | failed | queued | confirm_p50_ms | confirm_p95_ms | confirm_p99_ms | confirm_max_ms 
+--------------+-----------+----------+--------+--------+----------------+----------------+----------------+----------------
+         2202 |      2202 |        0 |      0 |      0 |        20216.4 |        22498.8 |        22697.6 |        22728.4
+
+--- stock invariant per event (PRD 12.3)
+ event_id | total_tickets | remaining_tickets | confirmed | invariant_ok 
+----------+---------------+-------------------+-----------+--------------
+       60 |          1000 |                 0 |      1000 | t
+       61 |          1000 |                 0 |      1000 | t
+       62 |          1000 |               798 |       202 | t
+       63 |          1000 |              1000 |         0 | t
+
+--- outbox (M7, async only)
+ outbox_rows | unpublished | publish_p95_ms | publish_max_ms 
+-------------+-------------+----------------+----------------
+        2202 |           0 |         1050.5 |        13117.9
+
+--- processing throughput (processed_messages)
+ processed | span_s | per_second 
+-----------+--------+------------
+      2202 |  27.72 |         79

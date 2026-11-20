@@ -3,7 +3,7 @@
 > 요구사항 기준: [PRD §8 시스템 아키텍처](../prd.md#8-시스템-아키텍처). 이 문서는 **구현된 결과**를 주차별로 기록합니다.
 > 설계 결정의 이유는 [ADR-0001](adr/0001-why-kafka.md)에 있습니다.
 
-## 현재 구현 상태 (4주차 완료)
+## 현재 구현 상태 (6주차 완료)
 
 ```mermaid
 flowchart LR
@@ -29,7 +29,9 @@ flowchart LR
 | 원자적 재고 감소 | ✅ 3주차 | 예약 행 잠금 + 조건부 UPDATE. 중복 메시지는 상태 확인으로 건너뜀 |
 | `processed_messages` 중복 이력 | ✅ 4주차 | 같은 `message_id`는 건너뜀, 처리 결과(`outcome`) 기록 (MSG-01) |
 | 동시성·불변식 검증 | ✅ 4주차 | CON-02, 롤백(FR-INV-03), 100장/150명 동시 접수 → 정확히 100건 확정 |
-| 재시도 · DLT | ⏳ 6주차 | 현재는 Spring Kafka 기본 오류 처리 |
+| 재시도 · DLT | ✅ 6주차 | 일시 오류 3회 백오프 재시도, 영구 오류 즉시 DLT, `dead_letter_messages` 감사 이력 |
+| 정적 멤버십 | ✅ 6주차 | 강제 종료 후 재시작 시 파티션 즉시 재할당 (45초 정지 해소) |
+| 장애 실험 | ✅ 6주차 | 프로세스 강제 종료 4회, Kafka 브로커 14초 중단 → 유실·중복 반영 0 |
 | Redis 빈도 제한 | ⏳ 7주차 | |
 
 ## 목표 구성도
@@ -109,12 +111,13 @@ sequenceDiagram
 
 ## 장애 시나리오별 동작
 
-| 장애 | 동작 | 근거 실험 |
-| --- | --- | --- |
-| Kafka 일시 중단 | | `experiments/outbox-republish.md` |
-| Consumer 강제 종료 | | `experiments/consumer-crash.md` |
-| 중복 메시지 | | `experiments/duplicate-event.md` |
-| 영구 오류 메시지 | | MSG-04 테스트 |
+| 장애 | 동작 | 실측 결과 | 근거 |
+| --- | --- | --- | --- |
+| Kafka 브로커 중단 | 접수는 계속 202 (DB만 씀). 이벤트는 Outbox에 쌓였다가 브로커 복구 후 발행 | 14초 중단 중 30건 접수, 복구 4.5초 후 전부 처리, 중복 0 | [outbox-republish.md](../experiments/outbox-republish.md) |
+| 애플리케이션 강제 종료 (`taskkill /F`) | 커밋 전 접수는 롤백, 커밋된 접수는 재시작 후 처리. 재전달·재발행분은 건너뜀 | 4회 모두 유실 0, 중복 반영 0, 재시작 후 3.9~9초에 처리 완료 | [consumer-crash.md](../experiments/consumer-crash.md) |
+| 같은 메시지 재전달 | `processed_messages`로 건너뜀 | 재고·이력 변화 없음 | [duplicate-event.md](../experiments/duplicate-event.md) |
+| 영구 오류 메시지 | 재시도 없이 DLT → `dead_letter_messages` | 깨진 JSON, schemaVersion 99, 없는 예약 → DLT | `DeadLetterIntegrationTest` |
+| 일시 오류 | 200/400/800ms 백오프 재시도. 실패마다 재고·상태 롤백 | 2번 실패 후 3번째 성공, 재고 1회 감소, DLT 없음 | `DeadLetterIntegrationTest` |
 
 ## 설정값
 
@@ -127,4 +130,5 @@ sequenceDiagram
 | Listener ack-mode | `record` | 레코드 처리(DB 커밋)가 끝날 때마다 커밋 |
 | Outbox 폴링 주기 / 배치 크기 | 100ms / 200건 | 로컬 기준 접수 → 발행 지연 약 200ms 이내. 5주차 부하 테스트로 조정 |
 | Consumer 동시성 | 3 | 파티션 수와 같음 |
-| 재시도 횟수 / 간격 | | 6주차 |
+| 재시도 횟수 / 간격 | 3회 / 200·400·800ms (blocking) | 파티션 안의 순서 유지. 영구 오류는 재시도 없이 DLT |
+| Consumer `group.instance.id` | `ticketflow-local-1` (+`-0/-1/-2`) | 정적 멤버십. 강제 종료 후 45초 정지 해소 |

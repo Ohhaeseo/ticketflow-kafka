@@ -8,7 +8,7 @@
 | 개발 기간 | 2026-11-23 ~ 2027-01-17 (8주) |
 | 개발 환경 | Windows 11 + WSL2 + Docker Desktop, RAM 32GB 이상, GPU 불필요 |
 | 예산 | 서비스 비용 0원 (로컬 오픈소스만 사용, 전기료 제외) |
-| 상태 | 진행 중 — 3주차 구현 완료. 남은 미결 사항은 [§18](#18-미결-사항-open-questions) 참고 |
+| 상태 | 진행 중 — 6주차 구현 완료. 남은 미결 사항은 [§18](#18-미결-사항-open-questions) 참고 |
 
 ---
 
@@ -747,3 +747,5 @@ ticketflow-kafka/
 | A10 | Relay가 Kafka 메시지 key를 알 방법이 정의되지 않음 | `outbox_events.message_key` 추가 (3주차) | payload를 다시 파싱하거나 예약 테이블을 조인하지 않고 key를 정할 수 있음 |
 | A11 | `INDEX(published_at, created_at)` | 부분 인덱스 `(id) WHERE published_at IS NULL`로 대체 (3주차) | Relay는 미발행 행만 id 순으로 읽음. 발행된 행이 인덱스에서 빠져 테이블이 커져도 비용이 일정 |
 | A12 | Consumer 처리 순서에 예약 행 잠금이 없음 | `SELECT ... FOR UPDATE`로 예약 행을 잠근 뒤 상태 확인 (3주차) | 같은 예약의 중복 메시지가 동시에 처리되어도 재고 감소가 한 번만 일어남 |
+| A13 | "DLT 이동, 감사 이력 유지"의 저장 위치가 없음 | `dead_letter_messages` 테이블 + DLT 감사 리스너 (6주차) | DLT 토픽은 보존 기간이 지나면 사라짐. 운영자가 SQL·API로 원인을 바로 확인 |
+| A14 | Consumer 재시작 시간에 대한 요구 없음 | 정적 멤버십 `group.instance.id` (6주차) | 강제 종료 후 `session.timeout.ms`(45초) 동안 처리가 멈추는 것을 실험에서 확인. 설정 후 재시작 즉시 재할당 |

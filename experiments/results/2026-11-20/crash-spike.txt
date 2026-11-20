@@ -1,0 +1,49 @@
+# crash experiment crash-spike (LOAD-01 crash-spike)
+scenario=spike kill_at=5.1s killed_pid=37492
+before_kill: reservations=807 queued=804 confirmed=3 unpublished_outbox=588
+after_kill:  reservations=1000 queued=966 confirmed=34 unpublished_outbox=181
+restart_to_healthy_s=10.3 drain_after_restart_s=41.3
+after_restart_log: duplicate_message_skipped=102 reservation_already_final=0
+=== k6 summary ===
+RUN_LABEL=crash-spike
+TITLE=LOAD-01 crash-spike
+EVENT_IDS=[58]
+reserve_requests=1000
+reserve_rps=265.8
+test_duration_s=3.8
+reserve_p50_ms=1716.7
+reserve_p95_ms=2398.6
+reserve_p99_ms=2465.0
+reserve_max_ms=2506.0
+accepted=1000
+status_409=0
+status_429=0
+status_4xx_other=0
+status_5xx=0
+network_errors=0
+error_rate_pct=0.0
+dropped_iterations=0
+max_vus=1000
+--- exactly-once check
+ reservations | still_queued | processing_records | skipped_records | applied_twice | never_applied 
+--------------+--------------+--------------------+-----------------+---------------+---------------
+         1000 |            0 |               1000 |               0 |             0 |             0
+--- reservations (M2 confirm latency = updated_at - created_at)
+ reservations | confirmed | sold_out | failed | queued | confirm_p50_ms | confirm_p95_ms | confirm_p99_ms | confirm_max_ms 
+--------------+-----------+----------+--------+--------+----------------+----------------+----------------+----------------
+         1000 |       100 |      900 |      0 |      0 |        50030.3 |        52308.3 |        52453.9 |        52482.2
+
+--- stock invariant per event (PRD 12.3)
+ event_id | total_tickets | remaining_tickets | confirmed | invariant_ok 
+----------+---------------+-------------------+-----------+--------------
+       58 |           100 |                 0 |       100 | t
+
+--- outbox (M7, async only)
+ outbox_rows | unpublished | publish_p95_ms | publish_max_ms 
+-------------+-------------+----------------+----------------
+        1000 |           0 |        10491.3 |        10584.0
+
+--- processing throughput (processed_messages)
+ processed | span_s | per_second 
+-----------+--------+------------
+      1000 |  53.84 |         19

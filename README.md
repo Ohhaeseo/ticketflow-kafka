@@ -15,8 +15,8 @@ Kafka 이벤트 기반 비동기 예약 · 동시성 제어 · 장애 대응 · 
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-FF4438?style=for-the-badge&logo=redis&logoColor=white)
 
-![Status](https://img.shields.io/badge/status-week_5_done-brightgreen?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-48_passed-success?style=flat-square)
+![Status](https://img.shields.io/badge/status-week_6_done-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-54_passed-success?style=flat-square)
 ![Period](https://img.shields.io/badge/period-8_weeks-blue?style=flat-square)
 ![Cost](https://img.shields.io/badge/cost-%E2%82%A90-success?style=flat-square)
 
@@ -27,8 +27,8 @@ Kafka 이벤트 기반 비동기 예약 · 동시성 제어 · 장애 대응 · 
 <br>
 
 > [!NOTE]
-> **5주차 완료** (2026-11-20 기준): k6로 1,000명이 100장에 동시 예약하는 LOAD-01에서 **동기·비동기 모두 CONFIRMED 정확히 100건**을 확인했고, 50~500 RPS 단계별 성능을 같은 조건으로 비교했습니다 ([벤치마크 보고서](docs/benchmark-report.md)).
-> 다음은 6주차 Consumer 중단·재시작, Outbox 재발행, 재시도·DLT입니다.
+> **6주차 완료** (2026-11-20 기준): 재시도·DLT를 붙이고, 부하 중 프로세스 강제 종료(4회)와 Kafka 브로커 중단을 실험했습니다. **모든 경우 유실 0, 중복 반영 0**이었고, 실험 중 발견한 "강제 종료 후 45초 처리 정지"를 정적 멤버십으로 고쳤습니다 ([장애 대응](#-장애-대응)).
+> 다음은 7주차 Redis 요청 빈도 제한과 운영 지표·모니터링입니다.
 
 <br>
 
@@ -173,7 +173,7 @@ stateDiagram-v2
 
 **P1 — 안정성·운영**
 
-- [ ] Consumer 장애 복구 (재시도·DLT)
+- [x] Consumer 장애 복구 (재시도·DLT)
 - [ ] Redis 요청 빈도 제한 (`429`)
 - [ ] 운영 지표 (확정 지연, 오류율, lag)
 - [x] 동기 처리 비교 모드 (벤치마크용)
@@ -273,6 +273,22 @@ UPDATE events
 
 <br>
 
+## 🧯 장애 대응
+
+| 장애 | 시스템 동작 | 실측 결과 | 운영자가 할 일 |
+| --- | --- | --- | --- |
+| **애플리케이션 강제 종료** | 커밋 전 접수는 롤백되고 클라이언트는 오류를 받는다. 커밋된 접수는 재시작 후 처리. 재전달·재발행 메시지는 `processed_messages`로 건너뜀 | 부하 중 `taskkill /F` 4회: 유실 0, 중복 반영 0, 재시작 후 3.9~9초에 처리 완료 | 재시작만 하면 된다. 클라이언트는 같은 `Idempotency-Key`로 재시도 |
+| **Kafka 브로커 중단** | 접수는 계속 `202` (DB만 씀). 이벤트는 Outbox에 쌓였다가 브로커 복구 후 발행 | 14초 중단 중 30건 접수 → 복구 4.5초 후 전부 처리, 중복 0 | 브로커 복구. Outbox 미발행 건수 확인 |
+| **처리 중 일시 오류** (DB 연결 등) | 같은 파티션 안에서 200·400·800ms 백오프로 3번 재시도. 실패마다 재고·상태 롤백 | 2번 실패 후 성공, 재고 1회만 감소 | 없음. 계속 실패하면 DLT로 이동 |
+| **처리할 수 없는 메시지** (깨진 JSON, 스키마 불일치, 없는 예약) | 재시도 없이 DLT로 이동, `dead_letter_messages`에 원본·예외 기록 | 3가지 모두 DLT 이동, 감사 이력 남음 | `dead_letter_messages`에서 원인 확인 후 조치 |
+| **같은 메시지 재전달** | 예약 행 잠금 → `processed_messages` 확인 → 건너뜀 | 재고·이력 변화 없음 | 없음 |
+
+**실험에서 발견해 고친 문제:** 강제 종료된 Consumer는 그룹 탈퇴 요청을 보내지 못해서, 재시작한 앱이 `session.timeout.ms`(45초) 동안 파티션을 받지 못했습니다. Consumer 정적 멤버십(`group.instance.id`)을 설정해 재시작 즉시 파티션을 돌려받게 했습니다 (재시작 후 처리 완료 41.3초 → 3.9~9초).
+
+자세한 기록: [Consumer 강제 종료](experiments/consumer-crash.md) · [Outbox 재발행·Kafka 중단](experiments/outbox-republish.md) · [중복 메시지](experiments/duplicate-event.md)
+
+<br>
+
 ## 📁 프로젝트 구조
 
 ```text
@@ -316,8 +332,9 @@ ticketflow-kafka
 │
 ├── experiments/                   # 장애 재현 실험 기록
 │   ├── duplicate-event.md         # MSG-01
-│   ├── consumer-crash.md          # MSG-02
-│   └── outbox-republish.md        # MSG-03
+│   ├── consumer-crash.md          # MSG-02 (프로세스 강제 종료)
+│   ├── outbox-republish.md        # MSG-03 (재발행, Kafka 중단)
+│   └── crash_test.py              # 강제 종료 실험 자동화
 │
 ├── docs/
 │   ├── architecture.md
@@ -344,7 +361,7 @@ API, Outbox Relay, Consumer는 **하나의 Spring Boot 코드베이스**에서 �
 | 3 | 12/07 ~ 12/13 | Outbox 트랜잭션, Relay, Kafka Consumer | 접수 → 이벤트 → 예약 완료 | ✅ |
 | 4 | 12/14 ~ 12/20 | 원자적 재고 감소, 중복 소비 방지 | 100장 초과 확정 없음 | ✅ |
 | 5 | 12/21 ~ 12/27 | k6 1,000명 시뮬레이션, 병목 분석 | 재고 불변식 + 성능 보고 | ✅ |
-| 6 | 12/28 ~ 01/03 | Consumer 중단·재시작, 중복 발행, DLT | 장애 복구 테스트 | ⏳ |
+| 6 | 12/28 ~ 01/03 | Consumer 중단·재시작, 중복 발행, DLT | 장애 복구 테스트 | ✅ |
 | 7 | 01/04 ~ 01/10 | Redis 빈도 제한, 지표·모니터링 | 운영 관측 지표 | ⏳ |
 | 8 | 01/11 ~ 01/17 | 통합 테스트, CI, 시연 영상 | 재현 가능한 포트폴리오 | ⏳ |
 

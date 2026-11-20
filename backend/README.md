@@ -52,8 +52,11 @@ Docker만 실행 중이면 됩니다. Testcontainers가 Compose와 같은 이미
 | `reservation/ReservationFlowIntegrationTest` | **E2E**: 티켓 2장·3명 → Outbox → Kafka → Consumer → CONFIRMED 2, SOLD_OUT 1, 잔여 0, 미발행 0 |
 | `outbox/OutboxIntegrationTest` | 접수 시 Outbox 1건(계약 필드), 재요청·409는 Outbox 없음, Relay 발행 후 `published_at` |
 | `reservation/SyncProcessingModeIntegrationTest` | **FR-BMK-01** 동기 비교 모드: 201 + 최종 상태, Outbox 없음, 재요청 200, 동시 접수 시 재고만큼만 확정 (별도 컨텍스트) |
+| `messaging/DeadLetterIntegrationTest` | **MSG-04**: 깨진 JSON·schemaVersion 99·없는 예약 → DLT + 감사 이력. **FR-CSM-03**: 트리거로 2번 실패 주입 → 백오프 재시도 후 성공, DLT 없음 |
+| `messaging/ConsumerRestartIntegrationTest` | **MSG-02**: 리스너 컨테이너를 멈춘 사이 8건 접수 → 재시작 후 확정 5, 매진 3 |
+| `outbox/OutboxRepublishIntegrationTest` | **MSG-03**: `published_at`을 되돌려 재발행 → Kafka에 같은 messageId 2번, 재고는 1번 감소 |
 
-총 48개. 동시성·중복 테스트는 반복 실행으로 결과가 흔들리지 않는 것을 확인했습니다. 재고 불변식 검사는 `support/StockInvariant`를 함께 씁니다.
+총 54개. 동시성·중복 테스트는 반복 실행으로 결과가 흔들리지 않는 것을 확인했습니다. 재고 불변식 검사는 `support/StockInvariant`를 함께 씁니다.
 
 Relay와 Consumer는 테스트 중에도 백그라운드에서 돈다. 처리 로직만 따로 검증할 때는 Outbox 없이 예약을 직접 저장해(`ReservationCommandRepository`) Consumer가 끼어들지 않게 한다.
 
@@ -66,7 +69,7 @@ Relay와 Consumer는 테스트 중에도 백그라운드에서 돈다. 처리 �
 | `idempotency` | 멱등성 키 검증, 요청 해시(SHA-256), Consumer 처리 이력(`processed_messages`) | ✅ 2·4주차 |
 | `user` | 테스트용 합성 사용자 (local 시드 1~1000) | ✅ 2주차 |
 | `outbox` | Outbox 행·저장소, Relay(Poller) | ✅ 3주차 |
-| `messaging` | Kafka 토픽 설정, 메시지 DTO, Outbox 기록(`producer`), Listener(`consumer`), 재시도·DLT | ✅ 3주차, 재시도·DLT 6주차 |
+| `messaging` | Kafka 토픽·오류 처리 설정, 메시지 DTO, Outbox 기록(`producer`), Listener(`consumer`), DLT 감사(`dlt`) | ✅ 3·6주차 |
 | `monitoring` | 관리자 지표 API, 커스텀 Micrometer 지표 | 7주차 |
 | `global` | 공통 설정(OpenAPI, Clock), 예외 처리, 오류 응답 형식, 테스트용 헤더 인증(`auth`) | ✅ 1~2주차 |
 
@@ -76,9 +79,9 @@ Relay와 Consumer는 테스트 중에도 백그라운드에서 돈다. 처리 �
 | --- | --- |
 | `test/.../support` | Testcontainers 공통 설정, `@IntegrationTest` |
 | `test/.../event` | 공연 API, DB 제약 |
-| `test/.../messaging` | Kafka 연결·group id, MSG-01 ✅ · MSG-04 (6주차) |
+| `test/.../messaging` | Kafka 연결·group id, MSG-01, MSG-02, MSG-04, 재시도 ✅ |
 | `test/.../reservation` | 예약 API, CON-01, CON-02, 처리 로직·롤백, E2E, 초과 판매 방지 ✅ · SEC-01 (7주차) |
-| `test/.../outbox` | Outbox 기록·발행 ✅ · MSG-03 보조 (6주차) |
+| `test/.../outbox` | Outbox 기록·발행, MSG-03 재발행 ✅ |
 
 ## Flyway 마이그레이션
 

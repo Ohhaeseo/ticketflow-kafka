@@ -29,9 +29,43 @@
 | `eventId` | long | Y | 메시지 key와 같음 |
 | `occurredAt` | ISO-8601 UTC | Y | 접수 시각 |
 
-## DLT 헤더
+## 재시도와 DLT (6주차 ✅)
 
-<!-- 6주차: DLT로 보낼 때 남기는 원본 토픽·파티션·오프셋·예외 정보 -->
+구현: `messaging/config/KafkaErrorHandlingConfig`
+
+| 오류 | 예 | 처리 |
+| --- | --- | --- |
+| 일시 오류 | DB 연결 끊김, 잠금 타임아웃, 예상하지 못한 예외 | 같은 파티션 안에서 **200ms → 400ms → 800ms** 간격으로 3번 재시도. 그래도 실패하면 DLT |
+| 영구 오류 | JSON 파싱 실패(`JacksonException`), `schemaVersion` 불일치, 필수 값 누락, 대상 예약 없음 (`NonRetryableMessageException`) | 재시도 없이 바로 DLT |
+| 업무 결과 | `SOLD_OUT`, `FAILED(SALES_CLOSED)` | 오류가 아니다. 정상 처리하고 오프셋 커밋 |
+
+- 재시도는 **blocking** 방식이다. 재시도하는 동안 같은 파티션의 뒤 메시지는 기다리므로 파티션 안의 순서가 유지된다. 대가로 영구 오류가 아닌 독성 메시지 하나가 파티션을 최대 약 1.4초 붙잡는다. `@RetryableTopic`(non-blocking)은 순서를 보존하지 않아 쓰지 않았다 (PRD §10.3).
+- DLT 파티션은 원본과 같은 번호다 (`reservation.requested.v1-dlt`도 파티션 3개).
+
+### DLT 헤더와 감사 이력
+
+`DeadLetterPublishingRecoverer`가 원본 레코드에 아래 헤더를 붙여 DLT로 보낸다. `DeadLetterAuditListener`(group `ticketflow-dlt-audit`)가 이를 읽어 `dead_letter_messages` 테이블에 기록한다.
+
+| 헤더 | 기록 컬럼 |
+| --- | --- |
+| `kafka_dlt-original-topic` / `-partition` / `-offset` | `original_topic`, `original_partition`, `original_offset` (UNIQUE) |
+| `kafka_dlt-exception-fqcn` | `exception_class` (보통 `ListenerExecutionFailedException`) |
+| `kafka_dlt-exception-cause-fqcn` | `exception_cause_class` (실제 원인, 예: `tools.jackson...`, `NonRetryableMessageException`) |
+| `kafka_dlt-exception-message` | `exception_message` |
+
+감사 리스너는 전용 컨테이너 팩토리를 쓴다. 기록에 실패하면 재시도 후 로그만 남기고 DLT로 다시 보내지 않는다 (무한 루프 방지).
+
+```sql
+-- 운영자 확인용
+SELECT received_at, original_partition, original_offset, exception_cause_class, exception_message, payload
+  FROM dead_letter_messages ORDER BY received_at DESC LIMIT 20;
+```
+
+### Consumer 그룹 멤버십
+
+| 설정 | 값 | 이유 |
+| --- | --- | --- |
+| `group.instance.id` | `${KAFKA_GROUP_INSTANCE_ID:ticketflow-local-1}` (+ 컨테이너가 `-0/-1/-2` 붙임) | 정적 멤버십. 강제 종료 후 재시작해도 리밸런스 없이 파티션을 바로 돌려받는다. 없으면 `session.timeout.ms`(45초) 동안 처리가 멈춘다 ([experiments/consumer-crash.md](../experiments/consumer-crash.md)) |
 
 ## Producer / Consumer 설정
 
@@ -48,7 +82,7 @@
 
 - 애플리케이션의 kafka-clients는 4.2.2, 브로커는 4.3.2다.
 - `@KafkaListener`에 `id`를 주면 Spring Kafka는 기본적으로 그 id를 group id로 쓴다. 그래서 `groupId`를 명시했다 (3주차에 실제로 겪은 문제).
-- 일시 오류와 영구 오류의 분류, 재시도 횟수, DLT 이동은 6주차에 정한다. 현재는 Spring Kafka 기본 오류 처리(재시도 후 건너뜀)다.
+- 일시 오류와 영구 오류의 분류, 재시도, DLT 이동은 아래 [재시도와 DLT](#재시도와-dlt-6주차-) 참고.
 
 ## 발행·소비 보장
 
