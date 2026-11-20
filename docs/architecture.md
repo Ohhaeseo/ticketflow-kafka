@@ -3,12 +3,12 @@
 > 요구사항 기준: [PRD §8 시스템 아키텍처](../prd.md#8-시스템-아키텍처). 이 문서는 **구현된 결과**를 주차별로 기록합니다.
 > 설계 결정의 이유는 [ADR-0001](adr/0001-why-kafka.md)에 있습니다.
 
-## 현재 구현 상태 (1주차 완료)
+## 현재 구현 상태 (2주차 완료)
 
 ```mermaid
 flowchart LR
-  Client[Client / Swagger UI] -->|/api/v1/events| API[Spring Boot 4.1.3<br/>Event API]
-  API -->|JPA · Flyway| PG[(PostgreSQL 18.7<br/>events)]
+  Client[Client / Swagger UI] -->|/api/v1/events<br/>/api/v1/reservations| API[Spring Boot 4.1.3<br/>Event · Reservation API]
+  API -->|JPA · JdbcClient · Flyway| PG[(PostgreSQL 18.7<br/>events · users · reservations)]
   API -->|KafkaAdmin: NewTopic| K[(Kafka 4.3.2 KRaft<br/>reservation.requested.v1<br/>reservation.requested.v1-dlt)]
   Client -->|/actuator/health| API
 ```
@@ -18,7 +18,8 @@ flowchart LR
 | 공연 등록·조회 API | ✅ | 등록은 `local` 프로필 전용 |
 | PostgreSQL + Flyway | ✅ | `V1__create_events.sql`, CHECK 제약 3개 |
 | Kafka KRaft 단일 노드 | ✅ | 자동 토픽 생성 꺼짐, 토픽은 애플리케이션이 생성 |
-| 예약 접수 API | ⏳ 2주차 | |
+| 예약 접수·조회 API | ✅ | `202` + `QUEUED`, 멱등성 키, `ON CONFLICT DO NOTHING`으로 동시 요청 판정 |
+| 테스트용 사용자 식별 | ✅ | `X-Test-User-Id` 헤더, `local` 전용 (PRD Q4) |
 | Outbox Relay / Consumer | ⏳ 3주차 | |
 | 원자적 재고 감소 | ⏳ 4주차 | |
 | Redis 빈도 제한 | ⏳ 7주차 | |

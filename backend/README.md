@@ -24,7 +24,7 @@ cd backend
 .\gradlew.bat bootRun
 ```
 
-- 기본 프로필은 `local`입니다. 공연 등록 API와 Swagger UI가 켜집니다.
+- 기본 프로필은 `local`입니다. 공연 등록 API, Swagger UI, 테스트용 헤더 인증(`X-Test-User-Id`), 합성 사용자 시드가 켜집니다. 다른 프로필에서는 모두 꺼집니다.
 - DB·Kafka 접속 정보는 루트의 `.env`에서 읽습니다 (`spring.config.import: optional:file:../.env[.properties]`).
 - Compose 없이 Testcontainers로 인프라까지 띄우려면 `.\gradlew.bat bootTestRun`을 실행합니다.
 
@@ -42,18 +42,23 @@ Docker만 실행 중이면 됩니다. Testcontainers가 Compose와 같은 이미
 | `event/EventApiIntegrationTest` | 100장 공연 등록·조회, 목록, 404, 필드 검증 400, 판매 기간 오류, 잘못된 JSON |
 | `event/EventTableConstraintTest` | DB CHECK 제약: 초과 재고, 음수 재고, 0 이하로 감소, 판매 기간 역전 |
 | `messaging/KafkaIntegrationTest` | 기동 시 예약 토픽·DLT 생성(파티션 3), Producer → Consumer 송수신 |
+| `reservation/ReservationApiIntegrationTest` | 202 접수, 재요청 200(Q1), 409 두 종류(Q2), 400·401·404·422, 본인·관리자 조회, 내 예약 목록 |
+| `reservation/ReservationIdempotencyTest` | **CON-01**: 같은 요청 10회 순차·동시 → 예약 1건. 같은 공연에 다른 키 10개 동시 → 1건 + 409 9건 |
+
+총 29개. 동시성 테스트 3개는 3번 반복 실행해서 결과가 흔들리지 않는 것을 확인했습니다.
 
 ## 패키지 구조
 
 | 패키지 | 책임 | 상태 |
 | --- | --- | --- |
 | `event` | 공연 등록·조회, 재고 조회 | ✅ 1주차 |
-| `reservation` | 예약 접수·조회 API, 상태 전이, 동기 비교 모드 | 2주차 |
-| `idempotency` | 멱등성 키 검증, 요청 해시 비교 | 2주차 |
+| `reservation` | 예약 접수·조회 API, 상태 전이, 동기 비교 모드 | 접수·조회 ✅ 2주차, 상태 전이 3~4주차 |
+| `idempotency` | 멱등성 키 검증, 요청 해시(SHA-256) | ✅ 2주차 |
+| `user` | 테스트용 합성 사용자 (local 시드 1~1000) | ✅ 2주차 |
 | `outbox` | Outbox 엔티티, Relay(Poller) | 3주차 |
 | `messaging` | Kafka 토픽·Producer/Consumer 설정, 메시지 DTO, 재시도·DLT | 토픽 설정 ✅, 나머지 3·6주차 |
 | `monitoring` | 관리자 지표 API, 커스텀 Micrometer 지표 | 7주차 |
-| `global` | 공통 설정(OpenAPI), 예외 처리, 오류 응답 형식 | ✅ 1주차 |
+| `global` | 공통 설정(OpenAPI, Clock), 예외 처리, 오류 응답 형식, 테스트용 헤더 인증(`auth`) | ✅ 1~2주차 |
 
 ## 테스트 구조
 
@@ -62,7 +67,7 @@ Docker만 실행 중이면 됩니다. Testcontainers가 Compose와 같은 이미
 | `test/.../support` | Testcontainers 공통 설정, `@IntegrationTest` |
 | `test/.../event` | 공연 API, DB 제약 |
 | `test/.../messaging` | Kafka 연결 · CON-02, MSG-01, MSG-04 (예정) |
-| `test/.../reservation` | CON-01, SEC-01 (예정) |
+| `test/.../reservation` | 예약 API, CON-01 ✅ · SEC-01 (7주차) |
 | `test/.../outbox` | Outbox 기록·발행, MSG-03 보조 (예정) |
 
 ## Flyway 마이그레이션

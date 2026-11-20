@@ -2,13 +2,13 @@
 
 | 항목 | 내용 |
 | --- | --- |
-| 문서 버전 | v1.0 (Draft) |
+| 문서 버전 | v1.1 (Q1·Q2·Q4 결정 반영) |
 | 작성일 | 2026-11-20 |
 | 원본 | `ticketflow-kafka-project-plan.md` (개발 기획서) |
 | 개발 기간 | 2026-11-23 ~ 2027-01-17 (8주) |
 | 개발 환경 | Windows 11 + WSL2 + Docker Desktop, RAM 32GB 이상, GPU 불필요 |
 | 예산 | 서비스 비용 0원 (로컬 오픈소스만 사용, 전기료 제외) |
-| 상태 | 초안 — [§18 미결 사항](#18-미결-사항-open-questions) 확정 후 v1.1로 갱신 |
+| 상태 | 진행 중 — 2주차 구현 완료. 남은 미결 사항은 [§18](#18-미결-사항-open-questions) 참고 |
 
 ---
 
@@ -155,8 +155,8 @@
 | --- | --- | --- |
 | FR-RSV-01 | `POST /api/v1/reservations` — 요청 본문 `eventId`, 헤더 `Idempotency-Key`. 행사 존재 여부, 판매 기간, 키 형식, 사용자 식별을 검증한 뒤 **하나의 DB 트랜잭션에서** `reservations(status=QUEUED)`와 `outbox_events`를 함께 저장한다. | `202 Accepted` + `reservationId`, `status=QUEUED`, `statusUrl` 반환. 트랜잭션이 실패하면 둘 다 저장되지 않음 |
 | FR-RSV-02 | 같은 사용자가 같은 `Idempotency-Key`와 같은 본문으로 다시 요청하면 **새 예약을 만들지 않고 기존 예약을 반환**한다. 같은 키에 다른 본문이 오면 `409 Conflict`. | CON-01: 10회 반복 요청해도 예약 1건 |
-| FR-RSV-03 | 같은 사용자의 같은 행사 예약은 1건으로 제한한다 (`UNIQUE(event_id, user_id)`). 다른 멱등성 키로 다시 요청해도 새 예약은 생성되지 않는다. | 제안: `409` + 기존 `reservationId` 반환 ([Q2](#18-미결-사항-open-questions)) |
-| FR-RSV-04 | `GET /api/v1/reservations/{id}` — `QUEUED`, `CONFIRMED`, `SOLD_OUT`, `FAILED` 중 하나를 반환한다. **본인 또는 관리자만** 조회할 수 있다. | 다른 사용자 예약을 조회하면 `403`/`404` |
+| FR-RSV-03 | 같은 사용자의 같은 행사 예약은 1건으로 제한한다 (`UNIQUE(event_id, user_id)`). 다른 멱등성 키로 다시 요청해도 새 예약은 생성되지 않는다. | 결정: `409 RESERVATION_ALREADY_EXISTS` + 기존 `reservationId` 반환 ([Q2](#18-미결-사항-open-questions)) |
+| FR-RSV-04 | `GET /api/v1/reservations/{id}` — `QUEUED`, `CONFIRMED`, `SOLD_OUT`, `FAILED` 중 하나를 반환한다. **본인 또는 관리자만** 조회할 수 있다. | 다른 사용자 예약을 조회하면 `404` (존재 여부를 드러내지 않음) |
 | FR-RSV-05 | `GET /api/v1/users/me/reservations` — 내 예약 목록을 조회한다. | 본인 예약만 반환 |
 
 ### 6.3 Transactional Outbox
@@ -438,7 +438,7 @@ QUEUED ──┬──> CONFIRMED   재고 확보 성공
 | POST | `/events` | 테스트 관리자 | 201 | 로컬 프로필에서만 허용 |
 | GET | `/events` | 테스트 사용자 | 200 | 행사 목록 |
 | GET | `/events/{eventId}` | 테스트 사용자 | 200 | 행사 정보와 남은 재고 |
-| POST | `/reservations` | 인증된 테스트 사용자 | **202** (최초) / 200 (재요청, 제안) | `Idempotency-Key` 헤더 필수 |
+| POST | `/reservations` | 인증된 테스트 사용자 | **202** (최초) / 200 (재요청) | `Idempotency-Key` 헤더 필수 |
 | GET | `/reservations/{reservationId}` | 예약자 / 관리자 | 200 | 4가지 상태 중 하나 |
 | GET | `/users/me/reservations` | 예약자 | 200 | 내 예약 목록 |
 | GET | `/admin/metrics` | 관리자 | 200 | 예약 현황과 지표 |
@@ -471,11 +471,11 @@ Location: /api/v1/reservations/1024
 | 코드 | 상황 |
 | --- | --- |
 | 202 | 최초 접수 성공 (확정 아님) |
-| 200 | 같은 사용자·같은 키·같은 본문의 재요청 → 기존 예약과 현재 상태 반환 (제안, [Q1](#18-미결-사항-open-questions)) |
-| 400 | 요청 형식 오류, `Idempotency-Key` 누락 |
-| 401 / 403 | 사용자 식별 실패 / 다른 사용자 예약 접근 |
-| 404 | 행사 또는 예약 없음 |
-| 409 | 같은 키에 다른 본문, 또는 같은 사용자·같은 행사의 다른 키 요청 (제안, [Q2](#18-미결-사항-open-questions)) |
+| 200 | 같은 사용자·같은 키·같은 본문의 재요청 → 기존 예약과 현재 상태 반환 (결정, [Q1](#18-미결-사항-open-questions)) |
+| 400 | 요청 형식 오류, `Idempotency-Key` 누락·형식 오류 |
+| 401 | 사용자 식별 실패 (테스트 헤더 없음·형식 오류·미등록 사용자, 테스트 인증 비활성) |
+| 404 | 행사 또는 예약 없음. 다른 사용자의 예약도 404 |
+| 409 | 같은 키에 다른 본문(`IDEMPOTENCY_KEY_REUSED`), 또는 같은 사용자·같은 행사의 다른 키 요청(`RESERVATION_ALREADY_EXISTS`) (결정, [Q2](#18-미결-사항-open-questions)) |
 | 422 | 판매 기간 외 요청 |
 | 429 | 요청 빈도 제한 초과 |
 | 5xx | 서버 오류 (지표에서 4xx와 분리 집계) |
@@ -688,14 +688,15 @@ ticketflow-kafka/
 
 ## 18. 미결 사항 (Open Questions)
 
-구현 전에 결정이 필요한 항목이다. **제안**은 PRD 작성 시점의 기본안이며, 확정되면 v1.1에 반영한다.
+구현 전에 결정이 필요한 항목이다. **제안**은 PRD 작성 시점의 기본안이며, 확정되면 ✅로 표시한다.
+2026-11-20: Q1·Q2·Q4를 제안안대로 결정하고 2주차에 구현했다.
 
-| # | 질문 | 제안 | 결정 시점 |
+| # | 질문 | 제안 / 결정 | 결정 시점 |
 | --- | --- | --- | --- |
-| Q1 | 같은 사용자·키·본문 재요청의 응답 코드는? | 최초 202, 재요청은 200 + 기존 예약의 현재 상태 | 2주차 |
-| Q2 | 같은 사용자·같은 행사에 **다른 키**로 요청하면? | 409 + 기존 `reservationId` (원본의 "명확한 충돌 응답") | 2주차 |
+| Q1 | 같은 사용자·키·본문 재요청의 응답 코드는? | ✅ **결정:** 최초 202, 재요청은 200 + 기존 예약의 현재 상태 | 2주차 |
+| Q2 | 같은 사용자·같은 행사에 **다른 키**로 요청하면? | ✅ **결정:** 409 `RESERVATION_ALREADY_EXISTS` + 기존 `reservationId` | 2주차 |
 | Q3 | 판매 기간 안에 접수됐지만 종료 후 소비된 메시지는? | `FAILED` + `failure_reason=SALES_CLOSED`. 대안: 판매 기간 검증을 접수 시점 기준으로만 하고 Consumer에서는 생략 | 4주차 |
-| Q4 | MVP 사용자 식별 방식은? | `local` 프로필에서만 켜지는 테스트용 헤더 또는 고정 토큰. 다른 프로필에서는 비활성 | 2주차 |
+| Q4 | MVP 사용자 식별 방식은? | ✅ **결정:** `X-Test-User-Id` 헤더(관리자는 `X-Test-User-Role: ADMIN`). `ticketflow.test-auth.enabled`가 켜진 `local` 프로필에서만 동작하고, 꺼져 있으면 401. 합성 사용자 1~1000은 local 전용 시드 | 2주차 |
 | Q5 | Redis 장애 시 빈도 제한 정책은? | fail-open (요청 허용 + 경고 지표) | 7주차 |
 | Q6 | 토픽 파티션 수는? | 3 (핫 파티션 특성상 행사 하나의 처리량은 늘지 않음을 보고서에 명시) | 3주차 |
 | Q7 | Outbox `payload` 타입은 `text`와 `jsonb` 중 무엇으로? | 원본대로 `text`로 시작. 조회 필요가 생기면 `jsonb` 전환 | 3주차 |

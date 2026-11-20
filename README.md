@@ -15,8 +15,8 @@ Kafka 이벤트 기반 비동기 예약 · 동시성 제어 · 장애 대응 · 
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-FF4438?style=for-the-badge&logo=redis&logoColor=white)
 
-![Status](https://img.shields.io/badge/status-week_1_done-brightgreen?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-15_passed-success?style=flat-square)
+![Status](https://img.shields.io/badge/status-week_2_done-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-29_passed-success?style=flat-square)
 ![Period](https://img.shields.io/badge/period-8_weeks-blue?style=flat-square)
 ![Cost](https://img.shields.io/badge/cost-%E2%82%A90-success?style=flat-square)
 
@@ -27,8 +27,8 @@ Kafka 이벤트 기반 비동기 예약 · 동시성 제어 · 장애 대응 · 
 <br>
 
 > [!NOTE]
-> **1주차 완료** (2026-11-20 기준): 로컬 인프라(PostgreSQL·Kafka KRaft), 공연 등록·조회 API, Kafka 토픽 설정, Testcontainers 통합 테스트까지 동작합니다.
-> 다음은 2주차 예약 접수 API(`202` + `QUEUED`)와 멱등성 키입니다.
+> **2주차 완료** (2026-11-20 기준): 로컬 인프라(PostgreSQL·Kafka KRaft), 공연 API, 예약 접수 API(`202` + `QUEUED`)와 멱등성 키, 예약 상태 조회까지 동작합니다. 같은 요청 10개를 동시에 보내도 예약은 1건만 생깁니다 (CON-01).
+> 다음은 3주차 Transactional Outbox, Relay, Kafka Consumer입니다. 지금은 예약이 `QUEUED`에 머물고 재고는 줄지 않습니다.
 
 <br>
 
@@ -161,12 +161,12 @@ stateDiagram-v2
 **P0 — 핵심**
 
 - [x] 공연 등록·조회
-- [ ] 예약 접수 API (`202` + `reservationId`)
-- [ ] 멱등성 키 기반 중복 요청 방어
+- [x] 예약 접수 API (`202` + `reservationId`)
+- [x] 멱등성 키 기반 중복 요청 방어
 - [ ] Transactional Outbox 발행
 - [ ] Kafka Consumer 예약 처리
 - [ ] 원자적 재고 감소
-- [ ] 예약 상태 조회 (polling)
+- [x] 예약 상태 조회 (polling)
 
 </td>
 <td valign="top" width="50%">
@@ -262,13 +262,15 @@ ticketflow-kafka
 │       │   ├── java/com/ticketflow
 │       │   │   ├── event/         # 공연 등록·조회
 │       │   │   ├── reservation/   # 예약 접수·조회, 상태 전이
+│       │   │   ├── user/          # 테스트용 합성 사용자
 │       │   │   ├── idempotency/   # 멱등성 키 검증
 │       │   │   ├── outbox/        # Outbox 엔티티, Relay
 │       │   │   ├── messaging/     # Kafka Producer·Consumer, 재시도·DLT
 │       │   │   ├── monitoring/    # 관리자 지표 API
-│       │   │   └── global/        # 공통 설정, 예외, 응답 형식
+│       │   │   └── global/        # 공통 설정, 예외, 응답 형식, 테스트용 인증
 │       │   └── resources
-│       │       └── db/migration/  # Flyway 마이그레이션
+│       │       ├── db/migration/  # Flyway 마이그레이션
+│       │       └── db/seed/       # local 전용 시드 (합성 사용자 1~1000)
 │       └── test/java/com/ticketflow
 │           ├── reservation/       # CON-01, SEC-01
 │           ├── messaging/         # CON-02, MSG-01, MSG-04
@@ -310,7 +312,7 @@ API, Outbox Relay, Consumer는 **하나의 Spring Boot 코드베이스**에서 �
 | :---: | :---: | --- | --- | :---: |
 | 0 | ~ 11/20 | 기획·설계 | PRD, 폴더 구조 | ✅ |
 | 1 | 11/23 ~ 11/29 | Spring Boot, PostgreSQL·Kafka Compose, 공연 API | 헬스 체크, DB 연결, 토픽 송수신 | ✅ |
-| 2 | 11/30 ~ 12/06 | 예약 테이블, 접수 API, 멱등성 키 | `202` + `QUEUED` | ⏳ |
+| 2 | 11/30 ~ 12/06 | 예약 테이블, 접수 API, 멱등성 키 | `202` + `QUEUED` | ✅ |
 | 3 | 12/07 ~ 12/13 | Outbox 트랜잭션, Relay, Kafka Consumer | 접수 → 이벤트 → 예약 완료 | ⏳ |
 | 4 | 12/14 ~ 12/20 | 원자적 재고 감소, 중복 소비 방지 | 100장 초과 확정 없음 | ⏳ |
 | 5 | 12/21 ~ 12/27 | k6 1,000명 시뮬레이션, 병목 분석 | 재고 불변식 + 성능 보고 | ⏳ |
@@ -360,7 +362,7 @@ cd backend
 ### 4. 100장 공연 등록하기
 
 ```powershell
-Invoke-RestMethod -Method Post http://localhost:8080/api/v1/events -ContentType 'application/json' -Body '{"title":"Popular Concert","totalTickets":100,"salesStartAt":"2026-11-23T10:00:00Z","salesEndAt":"2026-12-31T23:59:59Z"}'
+Invoke-RestMethod -Method Post http://localhost:8080/api/v1/events -ContentType 'application/json' -Body '{"title":"Open Concert","totalTickets":100,"salesStartAt":"2026-01-01T00:00:00Z","salesEndAt":"2027-12-31T23:59:59Z"}'
 ```
 
 ```powershell
@@ -369,7 +371,23 @@ Invoke-RestMethod http://localhost:8080/api/v1/events/1
 
 공연 등록은 `local` 프로필(기본값)에서만 열립니다.
 
-### 5. 테스트
+### 5. 예약 접수하고 상태 조회하기
+
+`local` 프로필에는 테스트용 합성 사용자 1~1000이 들어 있고, `X-Test-User-Id` 헤더로 사용자를 고릅니다. 이 헤더는 테스트 전용이며 실제 인증이 아닙니다.
+
+```powershell
+Invoke-WebRequest -UseBasicParsing -Method Post http://localhost:8080/api/v1/reservations -Headers @{ 'X-Test-User-Id' = '42'; 'Idempotency-Key' = 'demo-user42-concert1-attempt1' } -ContentType 'application/json' -Body '{"eventId":1}'
+```
+
+처음에는 `202`가 나옵니다. 같은 명령을 다시 실행하면 새 예약 없이 `200`과 기존 예약이 나옵니다.
+
+```powershell
+Invoke-RestMethod http://localhost:8080/api/v1/users/me/reservations -Headers @{ 'X-Test-User-Id' = '42' }
+```
+
+> `202`는 좌석 확정이 아니라 접수 완료입니다. 3주차에 Consumer가 생기기 전까지 상태는 `QUEUED`로 남습니다.
+
+### 6. 테스트
 
 ```powershell
 cd backend
@@ -378,7 +396,7 @@ cd backend
 
 Testcontainers가 Compose와 같은 이미지로 컨테이너를 따로 띄우므로, Docker만 실행 중이면 됩니다.
 
-### 6. 정리
+### 7. 정리
 
 ```powershell
 docker compose -f infrastructure/compose.yml --env-file .env down
