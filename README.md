@@ -15,8 +15,8 @@ Kafka 이벤트 기반 비동기 예약 · 동시성 제어 · 장애 대응 · 
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-FF4438?style=for-the-badge&logo=redis&logoColor=white)
 
-![Status](https://img.shields.io/badge/status-week_2_done-brightgreen?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-29_passed-success?style=flat-square)
+![Status](https://img.shields.io/badge/status-week_3_done-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-39_passed-success?style=flat-square)
 ![Period](https://img.shields.io/badge/period-8_weeks-blue?style=flat-square)
 ![Cost](https://img.shields.io/badge/cost-%E2%82%A90-success?style=flat-square)
 
@@ -27,8 +27,8 @@ Kafka 이벤트 기반 비동기 예약 · 동시성 제어 · 장애 대응 · 
 <br>
 
 > [!NOTE]
-> **2주차 완료** (2026-11-20 기준): 로컬 인프라(PostgreSQL·Kafka KRaft), 공연 API, 예약 접수 API(`202` + `QUEUED`)와 멱등성 키, 예약 상태 조회까지 동작합니다. 같은 요청 10개를 동시에 보내도 예약은 1건만 생깁니다 (CON-01).
-> 다음은 3주차 Transactional Outbox, Relay, Kafka Consumer입니다. 지금은 예약이 `QUEUED`에 머물고 재고는 줄지 않습니다.
+> **3주차 완료** (2026-11-20 기준): 접수(`202`) → Transactional Outbox → Relay → Kafka → Consumer → `CONFIRMED`/`SOLD_OUT`까지 전체 흐름이 동작합니다. 재고는 예약 행 잠금 + 조건부 UPDATE로만 줄고, 같은 메시지를 다시 받아도 한 번만 적용됩니다.
+> 다음은 4주차 `processed_messages` 중복 이력(MSG-01), 병렬 처리 테스트(CON-02), 롤백·불변식 검증입니다.
 
 <br>
 
@@ -163,9 +163,9 @@ stateDiagram-v2
 - [x] 공연 등록·조회
 - [x] 예약 접수 API (`202` + `reservationId`)
 - [x] 멱등성 키 기반 중복 요청 방어
-- [ ] Transactional Outbox 발행
-- [ ] Kafka Consumer 예약 처리
-- [ ] 원자적 재고 감소
+- [x] Transactional Outbox 발행
+- [x] Kafka Consumer 예약 처리
+- [x] 원자적 재고 감소
 - [x] 예약 상태 조회 (polling)
 
 </td>
@@ -313,7 +313,7 @@ API, Outbox Relay, Consumer는 **하나의 Spring Boot 코드베이스**에서 �
 | 0 | ~ 11/20 | 기획·설계 | PRD, 폴더 구조 | ✅ |
 | 1 | 11/23 ~ 11/29 | Spring Boot, PostgreSQL·Kafka Compose, 공연 API | 헬스 체크, DB 연결, 토픽 송수신 | ✅ |
 | 2 | 11/30 ~ 12/06 | 예약 테이블, 접수 API, 멱등성 키 | `202` + `QUEUED` | ✅ |
-| 3 | 12/07 ~ 12/13 | Outbox 트랜잭션, Relay, Kafka Consumer | 접수 → 이벤트 → 예약 완료 | ⏳ |
+| 3 | 12/07 ~ 12/13 | Outbox 트랜잭션, Relay, Kafka Consumer | 접수 → 이벤트 → 예약 완료 | ✅ |
 | 4 | 12/14 ~ 12/20 | 원자적 재고 감소, 중복 소비 방지 | 100장 초과 확정 없음 | ⏳ |
 | 5 | 12/21 ~ 12/27 | k6 1,000명 시뮬레이션, 병목 분석 | 재고 불변식 + 성능 보고 | ⏳ |
 | 6 | 12/28 ~ 01/03 | Consumer 중단·재시작, 중복 발행, DLT | 장애 복구 테스트 | ⏳ |
@@ -357,7 +357,7 @@ cd backend
 | 헬스 체크 | http://localhost:8080/actuator/health |
 | Swagger UI | http://localhost:8080/swagger-ui/index.html |
 
-기동하면 Flyway가 스키마를 만들고, Kafka에 `reservation.requested.v1`과 `-dlt` 토픽(파티션 3)이 생성됩니다.
+기동하면 Flyway가 스키마를 만들고, Kafka에 `reservation.requested.v1`과 `-dlt` 토픽(파티션 3)이 생성됩니다. Outbox Relay(100ms 폴링)와 Consumer(동시성 3)도 같은 프로세스에서 함께 뜹니다.
 
 ### 4. 100장 공연 등록하기
 
@@ -385,7 +385,13 @@ Invoke-WebRequest -UseBasicParsing -Method Post http://localhost:8080/api/v1/res
 Invoke-RestMethod http://localhost:8080/api/v1/users/me/reservations -Headers @{ 'X-Test-User-Id' = '42' }
 ```
 
-> `202`는 좌석 확정이 아니라 접수 완료입니다. 3주차에 Consumer가 생기기 전까지 상태는 `QUEUED`로 남습니다.
+> `202`는 좌석 확정이 아니라 접수 완료입니다. 보통 1초 안에 Consumer가 처리해 `CONFIRMED`(재고 있음) 또는 `SOLD_OUT`(재고 없음)으로 바뀝니다.
+
+Kafka로 오간 메시지를 직접 보려면:
+
+```powershell
+docker exec ticketflow-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic reservation.requested.v1 --from-beginning --timeout-ms 5000 --formatter-property print.key=true
+```
 
 ### 6. 테스트
 

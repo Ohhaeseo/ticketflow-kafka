@@ -9,7 +9,8 @@
 | V1 | `db/migration/V1__create_events.sql` | `events` 테이블, CHECK 제약 3개 | 1주 ✅ |
 | V2 | `db/migration/V2__create_users_and_reservations.sql` | `users`, `reservations`, UNIQUE 2개, 상태 CHECK | 2주 ✅ |
 | R | `db/seed/R__seed_test_users.sql` | 합성 사용자 1~1000 (**local 프로필 전용**) | 2주 ✅ |
-| | | `outbox_events`, `processed_messages` | 3~4주 |
+| V3 | `db/migration/V3__create_outbox_events.sql` | `outbox_events`, 미발행 부분 인덱스 | 3주 ✅ |
+| | | `processed_messages` | 4주 |
 
 - 마이그레이션 위치: `backend/src/main/resources/db/migration/`. 시드는 `db/seed/`에 두고 `local` 프로필에서만 Flyway 위치에 추가한다 (`spring.flyway.locations`).
 - 시드는 반복 실행(repeatable) 마이그레이션이며 `ON CONFLICT DO NOTHING`이라 여러 번 실행해도 결과가 같다.
@@ -82,13 +83,59 @@ RETURNING id;
 - 경쟁하는 트랜잭션이 아직 커밋 전이면 PostgreSQL이 그 트랜잭션이 끝날 때까지 기다린 뒤 판정한다. 이어지는 `SELECT`는 READ COMMITTED에서 새 스냅샷을 쓰므로 먼저 저장된 예약을 읽을 수 있다.
 - 검증 테스트: `ReservationIdempotencyTest` — 같은 요청 10개 동시 전송 → 202 1회, 200 9회, 예약 1건.
 
-## 재고 감소 쿼리
+### `outbox_events`
 
-<!-- 4주차: 실제 사용하는 조건부 UPDATE, 영향 행 수에 따른 분기, 실행 계획(EXPLAIN) -->
+| 컬럼 | 타입 | 제약 |
+| --- | --- | --- |
+| `id` | `BIGINT` | PK, `GENERATED ALWAYS AS IDENTITY`. 발행 순서 |
+| `message_id` | `UUID` | NOT NULL, UNIQUE. 저장 시 생성, 재발행해도 같은 값 |
+| `reservation_id` | `BIGINT` | NOT NULL, FK → `reservations.id` |
+| `event_type` | `VARCHAR(100)` | NOT NULL. 현재 `ReservationRequested` |
+| `message_key` | `VARCHAR(100)` | NOT NULL. Kafka key (`eventId`) |
+| `payload` | `TEXT` | NOT NULL. 메시지 JSON (PRD Q7) |
+| `created_at` | `TIMESTAMPTZ` | NOT NULL |
+| `published_at` | `TIMESTAMPTZ` | 브로커 ack 후 채움. NULL이면 미발행 |
+
+인덱스 `idx_outbox_events_unpublished (id) WHERE published_at IS NULL` — Relay의 `WHERE published_at IS NULL ORDER BY id LIMIT n` 조회용. 발행된 행은 인덱스에서 빠진다.
+
+## Consumer 처리 쿼리 (3주차 ✅)
+
+`ReservationProcessor.process()`가 **한 트랜잭션** 안에서 아래 순서로 실행한다.
+
+```sql
+-- 1. 예약 행 잠금. 같은 예약의 중복 메시지는 여기서 줄을 선다
+SELECT id, event_id, status FROM reservations WHERE id = :id FOR UPDATE;
+-- status가 QUEUED가 아니면 아무것도 하지 않고 끝낸다 (중복 메시지)
+
+-- 2. 조건부 재고 감소 (FR-INV-01)
+UPDATE events
+   SET remaining_tickets = remaining_tickets - 1
+ WHERE id = :eventId
+   AND remaining_tickets > 0
+   AND sales_start_at <= CURRENT_TIMESTAMP
+   AND sales_end_at   >  CURRENT_TIMESTAMP;
+
+-- 3-a. 1행이면 확정
+UPDATE reservations SET status = 'CONFIRMED', updated_at = :now WHERE id = :id AND status = 'QUEUED';
+
+-- 3-b. 0행이면 원인을 가려 SOLD_OUT(재고 0) 또는 FAILED + SALES_CLOSED(판매 기간 밖)
+SELECT remaining_tickets,
+       (sales_start_at <= CURRENT_TIMESTAMP AND sales_end_at > CURRENT_TIMESTAMP) AS on_sale
+  FROM events WHERE id = :eventId;
+```
+
+- 어느 단계에서든 예외가 나면 재고 감소와 상태 변경이 함께 롤백된다 (FR-INV-03). 오프셋도 커밋되지 않아 메시지를 다시 받는다.
+- `CURRENT_TIMESTAMP`는 트랜잭션 시작 시각이다. 판매 기간 판정은 DB 시각 기준이다.
 
 ## 상태 전이
 
-<!-- 3~4주차: PRD §9.3 기준. 상태 변경 SQL의 WHERE status = 'QUEUED' 조건 -->
+```text
+QUEUED ──┬──> CONFIRMED   재고 감소 1행
+         ├──> SOLD_OUT    재고 감소 0행, remaining_tickets = 0
+         └──> FAILED      재고 감소 0행, 판매 기간 밖 (failure_reason = SALES_CLOSED)
+```
+
+모든 전이는 `WHERE status = 'QUEUED'` 조건을 붙여 최종 상태를 다시 바꾸지 않는다.
 
 ## 불변식 검증 쿼리
 

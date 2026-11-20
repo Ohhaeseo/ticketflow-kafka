@@ -3,14 +3,17 @@
 > 요구사항 기준: [PRD §8 시스템 아키텍처](../prd.md#8-시스템-아키텍처). 이 문서는 **구현된 결과**를 주차별로 기록합니다.
 > 설계 결정의 이유는 [ADR-0001](adr/0001-why-kafka.md)에 있습니다.
 
-## 현재 구현 상태 (2주차 완료)
+## 현재 구현 상태 (3주차 완료)
 
 ```mermaid
 flowchart LR
-  Client[Client / Swagger UI] -->|/api/v1/events<br/>/api/v1/reservations| API[Spring Boot 4.1.3<br/>Event · Reservation API]
-  API -->|JPA · JdbcClient · Flyway| PG[(PostgreSQL 18.7<br/>events · users · reservations)]
-  API -->|KafkaAdmin: NewTopic| K[(Kafka 4.3.2 KRaft<br/>reservation.requested.v1<br/>reservation.requested.v1-dlt)]
-  Client -->|/actuator/health| API
+  Client[Client / Swagger UI] -->|POST /reservations| API[Reservation API]
+  API -->|TX: reservations QUEUED + outbox_events| PG[(PostgreSQL 18.7)]
+  RELAY[Outbox Relay<br/>100ms 폴링] -->|미발행 조회 · published_at 갱신| PG
+  RELAY -->|key=eventId| K[(Kafka 4.3.2<br/>reservation.requested.v1)]
+  K --> C[Consumer x3<br/>ReservationProcessor]
+  C -->|TX: 행 잠금 → 조건부 재고 감소 → 상태 전이| PG
+  Client -->|GET /reservations/id| API
 ```
 
 | 구성 요소 | 상태 | 비고 |
@@ -20,8 +23,12 @@ flowchart LR
 | Kafka KRaft 단일 노드 | ✅ | 자동 토픽 생성 꺼짐, 토픽은 애플리케이션이 생성 |
 | 예약 접수·조회 API | ✅ | `202` + `QUEUED`, 멱등성 키, `ON CONFLICT DO NOTHING`으로 동시 요청 판정 |
 | 테스트용 사용자 식별 | ✅ | `X-Test-User-Id` 헤더, `local` 전용 (PRD Q4) |
-| Outbox Relay / Consumer | ⏳ 3주차 | |
-| 원자적 재고 감소 | ⏳ 4주차 | |
+| Transactional Outbox | ✅ 3주차 | 예약과 같은 트랜잭션에 기록, `message_id`는 저장 시 생성 |
+| Outbox Relay | ✅ 3주차 | 100ms 폴링, 배치 200건, ack 후 `published_at` 갱신 |
+| Kafka Consumer | ✅ 3주차 | 동시성 3, 레코드 단위 오프셋 커밋, group `ticketflow-reservation` |
+| 원자적 재고 감소 | ✅ 3주차 | 예약 행 잠금 + 조건부 UPDATE. 중복 메시지는 상태 확인으로 건너뜀 |
+| `processed_messages` 중복 이력 | ⏳ 4주차 | 메시지 단위 중복 판별·감사 이력 (MSG-01) |
+| 재시도 · DLT | ⏳ 6주차 | 현재는 Spring Kafka 기본 오류 처리 |
 | Redis 빈도 제한 | ⏳ 7주차 | |
 
 ## 목표 구성도
@@ -55,9 +62,47 @@ flowchart TD
 
 Testcontainers도 같은 이미지 태그를 쓴다 (`backend/src/test/java/com/ticketflow/support/TestcontainersConfiguration.java`).
 
-## 예약 처리 흐름
+## 예약 처리 흐름 (3주차 ✅)
 
-<!-- 3주차: PRD §8.3 시퀀스 다이어그램 + 실제 트랜잭션 경계, 오프셋 커밋 시점 -->
+```mermaid
+sequenceDiagram
+  autonumber
+  participant C as Client
+  participant API as ReservationService
+  participant DB as PostgreSQL
+  participant R as OutboxRelay
+  participant K as Kafka
+  participant W as Listener → ReservationProcessor
+
+  C->>API: POST /reservations
+  rect rgba(100,150,255,0.12)
+  note over API,DB: 트랜잭션 A
+  API->>DB: INSERT reservations ... ON CONFLICT DO NOTHING
+  API->>DB: INSERT outbox_events (message_id 생성)
+  end
+  API-->>C: 202 QUEUED
+  R->>DB: SELECT 미발행 ORDER BY id LIMIT 200
+  R->>K: send (key=eventId) × n
+  K-->>R: ack
+  R->>DB: UPDATE published_at (ack 받은 행만)
+  K->>W: record
+  rect rgba(100,200,120,0.12)
+  note over W,DB: 트랜잭션 B
+  W->>DB: SELECT reservation FOR UPDATE
+  W->>DB: UPDATE events 조건부 감소
+  W->>DB: UPDATE reservations 상태 전이 (WHERE status='QUEUED')
+  end
+  W->>K: offset commit (트랜잭션 B 커밋 후)
+```
+
+| 장애 지점 | 결과 |
+| --- | --- |
+| 트랜잭션 A 실패 | 예약도 Outbox도 남지 않음. 클라이언트는 오류를 받고 다시 시도 |
+| Relay가 발행 후 `published_at` 갱신 전 중단 | 다음 실행에서 같은 `message_id`로 재발행 → Consumer가 상태 확인으로 건너뜀 |
+| 트랜잭션 B 실패 | 재고·상태 모두 롤백, 오프셋 미커밋 → 메시지 재수신 |
+| 트랜잭션 B 커밋 후 오프셋 커밋 전 중단 | 재시작 후 같은 메시지 재수신 → `QUEUED`가 아니므로 건너뜀 |
+
+3주차 수동 검증: consumer group을 바꿔 메시지 4건을 처음부터 다시 읽게 했을 때, 재고와 확정 건수가 바뀌지 않았다.
 
 ## 장애 시나리오별 동작
 
@@ -76,6 +121,7 @@ Testcontainers도 같은 이미지 태그를 쓴다 (`backend/src/test/java/com/
 | 토픽 복제 계수 | 1 | 로컬 단일 브로커 |
 | Producer `acks` / idempotence | `all` / `true` | 브로커 측 중복 위험 완화 |
 | Consumer 자동 커밋 | 꺼짐 | 오프셋 커밋은 Spring 컨테이너가 처리 후 수행 |
-| Outbox 폴링 주기 / 배치 크기 | | 3주차 |
-| Consumer 동시성 | | 3주차 |
+| Listener ack-mode | `record` | 레코드 처리(DB 커밋)가 끝날 때마다 커밋 |
+| Outbox 폴링 주기 / 배치 크기 | 100ms / 200건 | 로컬 기준 접수 → 발행 지연 약 200ms 이내. 5주차 부하 테스트로 조정 |
+| Consumer 동시성 | 3 | 파티션 수와 같음 |
 | 재시도 횟수 / 간격 | | 6주차 |

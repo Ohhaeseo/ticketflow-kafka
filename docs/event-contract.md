@@ -13,9 +13,13 @@
 - 브로커는 `auto.create.topics.enable=false`다. 정의하지 않은 토픽으로 보내면 `UNKNOWN_TOPIC_OR_PARTITION` 오류가 난다.
 - 토픽 이름과 파티션 수는 `application.yml`의 `ticketflow.kafka.*`에서 바꾼다.
 
-## 메시지 스키마 — `reservation.requested.v1`
+## 메시지 스키마 — `reservation.requested.v1` (3주차 ✅)
 
-> 3주차에 구현한다. 아래는 PRD 기준 계약이다.
+구현: `messaging/dto/ReservationRequestedMessage`. Outbox `payload`에 JSON 문자열로 저장되고, Relay가 그대로 value로 보낸다.
+
+```json
+{"messageId":"e22c669f-4f64-4c45-8552-4e8061c2e555","schemaVersion":1,"reservationId":3,"eventId":3,"occurredAt":"2026-11-20T13:23:38.280278Z"}
+```
 
 | 필드 | 타입 | 필수 | 설명 |
 | --- | --- | --- | --- |
@@ -35,13 +39,24 @@
 | --- | --- | --- |
 | Producer | `acks` | `all` |
 | Producer | `enable.idempotence` | `true` |
-| Producer | key / value 직렬화 | `String` (JSON 문자열은 3주차에 결정) |
+| Producer | key / value 직렬화 | `String` / `String` (value는 JSON 문자열) |
 | Consumer | `group.id` | `ticketflow-reservation` |
 | Consumer | `auto.offset.reset` | `earliest` |
 | Consumer | `enable.auto.commit` | `false` |
+| Listener | `ack-mode` | `record` — 레코드 처리(DB 커밋)가 끝난 뒤 오프셋 커밋 |
+| Listener | `concurrency` | `3` (파티션 수와 같음) |
 
 - 애플리케이션의 kafka-clients는 4.2.2, 브로커는 4.3.2다.
-- 일시 오류와 영구 오류의 분류, 재시도 횟수는 6주차에 정한다.
+- `@KafkaListener`에 `id`를 주면 Spring Kafka는 기본적으로 그 id를 group id로 쓴다. 그래서 `groupId`를 명시했다 (3주차에 실제로 겪은 문제).
+- 일시 오류와 영구 오류의 분류, 재시도 횟수, DLT 이동은 6주차에 정한다. 현재는 Spring Kafka 기본 오류 처리(재시도 후 건너뜀)다.
+
+## 발행·소비 보장
+
+| 단계 | 보장 | 구현 |
+| --- | --- | --- |
+| 예약 → Outbox | 예약이 커밋되면 이벤트도 반드시 남는다 | 같은 트랜잭션 (`ReservationEventOutbox`, `Propagation.MANDATORY`) |
+| Outbox → Kafka | 최소 한 번 발행 | 브로커 ack 후에만 `published_at` 갱신. 갱신 전 장애 시 같은 `messageId`로 재발행 |
+| Kafka → DB | 업무 결과는 한 번만 적용 | 예약 행 `FOR UPDATE` 잠금 → `QUEUED`일 때만 처리 → 조건부 재고 감소. 커밋 후 오프셋 커밋 |
 
 ## 스키마 변경 규칙
 
