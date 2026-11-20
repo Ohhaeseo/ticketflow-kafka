@@ -56,7 +56,7 @@
 | --- | --- | --- |
 | 예약 → Outbox | 예약이 커밋되면 이벤트도 반드시 남는다 | 같은 트랜잭션 (`ReservationEventOutbox`, `Propagation.MANDATORY`) |
 | Outbox → Kafka | 최소 한 번 발행 | 브로커 ack 후에만 `published_at` 갱신. 갱신 전 장애 시 같은 `messageId`로 재발행 |
-| Kafka → DB | 업무 결과는 한 번만 적용 | 예약 행 `FOR UPDATE` 잠금 → `QUEUED`일 때만 처리 → 조건부 재고 감소. 커밋 후 오프셋 커밋 |
+| Kafka → DB | 업무 결과는 한 번만 적용 | 예약 행 `FOR UPDATE` 잠금 → `processed_messages`에 같은 `messageId`가 있으면 건너뜀 → `QUEUED`일 때만 조건부 재고 감소 → 처리 이력 기록. 커밋 후 오프셋 커밋 |
 
 ## 스키마 변경 규칙
 

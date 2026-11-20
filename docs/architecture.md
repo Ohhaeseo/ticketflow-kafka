@@ -3,7 +3,7 @@
 > 요구사항 기준: [PRD §8 시스템 아키텍처](../prd.md#8-시스템-아키텍처). 이 문서는 **구현된 결과**를 주차별로 기록합니다.
 > 설계 결정의 이유는 [ADR-0001](adr/0001-why-kafka.md)에 있습니다.
 
-## 현재 구현 상태 (3주차 완료)
+## 현재 구현 상태 (4주차 완료)
 
 ```mermaid
 flowchart LR
@@ -27,7 +27,8 @@ flowchart LR
 | Outbox Relay | ✅ 3주차 | 100ms 폴링, 배치 200건, ack 후 `published_at` 갱신 |
 | Kafka Consumer | ✅ 3주차 | 동시성 3, 레코드 단위 오프셋 커밋, group `ticketflow-reservation` |
 | 원자적 재고 감소 | ✅ 3주차 | 예약 행 잠금 + 조건부 UPDATE. 중복 메시지는 상태 확인으로 건너뜀 |
-| `processed_messages` 중복 이력 | ⏳ 4주차 | 메시지 단위 중복 판별·감사 이력 (MSG-01) |
+| `processed_messages` 중복 이력 | ✅ 4주차 | 같은 `message_id`는 건너뜀, 처리 결과(`outcome`) 기록 (MSG-01) |
+| 동시성·불변식 검증 | ✅ 4주차 | CON-02, 롤백(FR-INV-03), 100장/150명 동시 접수 → 정확히 100건 확정 |
 | 재시도 · DLT | ⏳ 6주차 | 현재는 Spring Kafka 기본 오류 처리 |
 | Redis 빈도 제한 | ⏳ 7주차 | |
 
@@ -89,8 +90,10 @@ sequenceDiagram
   rect rgba(100,200,120,0.12)
   note over W,DB: 트랜잭션 B
   W->>DB: SELECT reservation FOR UPDATE
+  W->>DB: processed_messages에 message_id 있으면 종료
   W->>DB: UPDATE events 조건부 감소
   W->>DB: UPDATE reservations 상태 전이 (WHERE status='QUEUED')
+  W->>DB: INSERT processed_messages (outcome)
   end
   W->>K: offset commit (트랜잭션 B 커밋 후)
 ```
@@ -98,9 +101,9 @@ sequenceDiagram
 | 장애 지점 | 결과 |
 | --- | --- |
 | 트랜잭션 A 실패 | 예약도 Outbox도 남지 않음. 클라이언트는 오류를 받고 다시 시도 |
-| Relay가 발행 후 `published_at` 갱신 전 중단 | 다음 실행에서 같은 `message_id`로 재발행 → Consumer가 상태 확인으로 건너뜀 |
-| 트랜잭션 B 실패 | 재고·상태 모두 롤백, 오프셋 미커밋 → 메시지 재수신 |
-| 트랜잭션 B 커밋 후 오프셋 커밋 전 중단 | 재시작 후 같은 메시지 재수신 → `QUEUED`가 아니므로 건너뜀 |
+| Relay가 발행 후 `published_at` 갱신 전 중단 | 다음 실행에서 같은 `message_id`로 재발행 → Consumer가 `processed_messages`를 보고 건너뜀 |
+| 트랜잭션 B 실패 | 재고·상태·처리 이력 모두 롤백, 오프셋 미커밋 → 메시지 재수신 후 다시 처리 |
+| 트랜잭션 B 커밋 후 오프셋 커밋 전 중단 | 재시작 후 같은 메시지 재수신 → `processed_messages`를 보고 건너뜀 |
 
 3주차 수동 검증: consumer group을 바꿔 메시지 4건을 처음부터 다시 읽게 했을 때, 재고와 확정 건수가 바뀌지 않았다.
 

@@ -10,7 +10,7 @@
 | V2 | `db/migration/V2__create_users_and_reservations.sql` | `users`, `reservations`, UNIQUE 2개, 상태 CHECK | 2주 ✅ |
 | R | `db/seed/R__seed_test_users.sql` | 합성 사용자 1~1000 (**local 프로필 전용**) | 2주 ✅ |
 | V3 | `db/migration/V3__create_outbox_events.sql` | `outbox_events`, 미발행 부분 인덱스 | 3주 ✅ |
-| | | `processed_messages` | 4주 |
+| V4 | `db/migration/V4__create_processed_messages.sql` | `processed_messages` (처리 결과 `outcome` 포함) | 4주 ✅ |
 
 - 마이그레이션 위치: `backend/src/main/resources/db/migration/`. 시드는 `db/seed/`에 두고 `local` 프로필에서만 Flyway 위치에 추가한다 (`spring.flyway.locations`).
 - 시드는 반복 실행(repeatable) 마이그레이션이며 `ON CONFLICT DO NOTHING`이라 여러 번 실행해도 결과가 같다.
@@ -98,16 +98,33 @@ RETURNING id;
 
 인덱스 `idx_outbox_events_unpublished (id) WHERE published_at IS NULL` — Relay의 `WHERE published_at IS NULL ORDER BY id LIMIT n` 조회용. 발행된 행은 인덱스에서 빠진다.
 
-## Consumer 처리 쿼리 (3주차 ✅)
+### `processed_messages`
+
+| 컬럼 | 타입 | 제약 |
+| --- | --- | --- |
+| `message_id` | `UUID` | PK. Outbox가 만든 메시지 ID |
+| `reservation_id` | `BIGINT` | NOT NULL, FK → `reservations.id`, 인덱스 |
+| `outcome` | `VARCHAR(30)` | NOT NULL. `CONFIRMED` / `SOLD_OUT` / `FAILED` / `SKIPPED_ALREADY_PROCESSED` |
+| `processed_at` | `TIMESTAMPTZ` | NOT NULL |
+
+- 원본 PRD 컬럼에 `outcome`을 더했다. 어떤 메시지가 어떤 결과를 냈는지 운영자가 추적할 수 있게 하려는 것이다.
+- 같은 `message_id`가 다시 오면 이 테이블을 보고 건너뛴다. 이때는 이력을 더 남기지 않는다 (PK).
+- 처리 트랜잭션이 롤백되면 이력도 함께 사라지므로, 실패한 메시지는 재전달 시 다시 처리된다.
+
+## Consumer 처리 쿼리 (3~4주차 ✅)
 
 `ReservationProcessor.process()`가 **한 트랜잭션** 안에서 아래 순서로 실행한다.
 
 ```sql
--- 1. 예약 행 잠금. 같은 예약의 중복 메시지는 여기서 줄을 선다
+-- 1. 예약 행 잠금. 같은 예약에 대한 메시지는 여기서 줄을 선다
 SELECT id, event_id, status FROM reservations WHERE id = :id FOR UPDATE;
--- status가 QUEUED가 아니면 아무것도 하지 않고 끝낸다 (중복 메시지)
 
--- 2. 조건부 재고 감소 (FR-INV-01)
+-- 2. 같은 message_id를 이미 처리했으면 끝낸다 (MSG-01: Kafka 재전달, Outbox 재발행)
+SELECT EXISTS (SELECT 1 FROM processed_messages WHERE message_id = :messageId);
+
+-- 3. status가 QUEUED가 아니면 재고를 건드리지 않는다 (다른 message_id로 온 중복)
+
+-- 4. 조건부 재고 감소 (FR-INV-01)
 UPDATE events
    SET remaining_tickets = remaining_tickets - 1
  WHERE id = :eventId
@@ -115,16 +132,20 @@ UPDATE events
    AND sales_start_at <= CURRENT_TIMESTAMP
    AND sales_end_at   >  CURRENT_TIMESTAMP;
 
--- 3-a. 1행이면 확정
+-- 5-a. 1행이면 확정
 UPDATE reservations SET status = 'CONFIRMED', updated_at = :now WHERE id = :id AND status = 'QUEUED';
 
--- 3-b. 0행이면 원인을 가려 SOLD_OUT(재고 0) 또는 FAILED + SALES_CLOSED(판매 기간 밖)
+-- 5-b. 0행이면 원인을 가려 SOLD_OUT(재고 0) 또는 FAILED + SALES_CLOSED(판매 기간 밖)
 SELECT remaining_tickets,
        (sales_start_at <= CURRENT_TIMESTAMP AND sales_end_at > CURRENT_TIMESTAMP) AS on_sale
   FROM events WHERE id = :eventId;
+
+-- 6. 처리 이력 기록
+INSERT INTO processed_messages (message_id, reservation_id, outcome, processed_at) VALUES (...);
 ```
 
-- 어느 단계에서든 예외가 나면 재고 감소와 상태 변경이 함께 롤백된다 (FR-INV-03). 오프셋도 커밋되지 않아 메시지를 다시 받는다.
+- 어느 단계에서든 예외가 나면 재고 감소, 상태 변경, 처리 이력이 함께 롤백된다 (FR-INV-03). 오프셋도 커밋되지 않아 메시지를 다시 받는다. 검증: `ReservationProcessorTest`에서 DB 트리거로 5단계를 실패시킨 뒤 재고가 원래대로인지 확인한다.
+- 재고 1장에 여러 예약이 동시에 4단계에 도달하면 `events` 행 잠금 때문에 순서대로 실행된다. 뒤에 실행되는 UPDATE는 앞 트랜잭션이 커밋된 값(0)으로 `WHERE remaining_tickets > 0`을 다시 평가하므로 0행이 된다 (READ COMMITTED 재평가). 검증: `ReservationConcurrencyTest` (CON-02).
 - `CURRENT_TIMESTAMP`는 트랜잭션 시작 시각이다. 판매 기간 판정은 DB 시각 기준이다.
 
 ## 상태 전이
@@ -139,7 +160,31 @@ QUEUED ──┬──> CONFIRMED   재고 감소 1행
 
 ## 불변식 검증 쿼리
 
-<!-- 5주차: PRD §12.3 SQL과 실행 결과 예시 -->
+```sql
+SELECT e.id,
+       e.total_tickets,
+       e.remaining_tickets,
+       count(r.id) FILTER (WHERE r.status = 'CONFIRMED') AS confirmed,
+       count(r.id) FILTER (WHERE r.status = 'SOLD_OUT')  AS sold_out,
+       count(r.id) FILTER (WHERE r.status = 'QUEUED')    AS queued
+  FROM events e
+  LEFT JOIN reservations r ON r.event_id = e.id
+ WHERE e.id = :eventId
+ GROUP BY e.id;
+-- 합격: remaining_tickets >= 0
+--       confirmed <= total_tickets
+--       confirmed + remaining_tickets = total_tickets   (MVP: 취소 없음)
+--       queued = 0                                      (처리 완료 후)
+```
+
+테스트 헬퍼 `support/StockInvariant`가 같은 조건을 검사한다.
+
+| 검증 | 조건 | 결과 (4주차) |
+| --- | --- | --- |
+| `OversellPreventionIntegrationTest` | 티켓 100장, 150명 동시 접수 (API → Outbox → Kafka → Consumer) | CONFIRMED 100, SOLD_OUT 50, 잔여 0, 처리 이력 150 |
+| `ReservationConcurrencyTest` | 티켓 1장, 예약 8건 동시 처리 | CONFIRMED 1, SOLD_OUT 7, 음수 재고 없음 |
+
+LOAD-01(1,000명, k6)은 5주차에 측정한다.
 
 ## 직접 접속
 
