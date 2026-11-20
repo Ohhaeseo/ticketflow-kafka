@@ -4,6 +4,7 @@ import com.ticketflow.messaging.consumer.NonRetryableMessageException;
 import org.apache.kafka.common.TopicPartition;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.KafkaException;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -44,6 +45,9 @@ public class KafkaErrorHandlingConfig {
 
         DefaultErrorHandler handler = new DefaultErrorHandler(recoverer, backOff);
         handler.addNotRetryableExceptions(NonRetryableMessageException.class, JacksonException.class);
+        // 배치 리스너는 재시도·복구 때마다 "Seek to current after exception"을 던져 위치를 되돌린다.
+        // 정상 동작이므로 ERROR가 아닌 WARN으로 남긴다 (실패 원인은 DLT 감사 이력에 남는다).
+        handler.setLogLevel(KafkaException.Level.WARN);
         return handler;
     }
 

@@ -63,6 +63,9 @@ ticketflow:
   reservation:
     # async: 접수(202) 후 Outbox → Kafka → Consumer가 확정. sync: 벤치마크 비교용, 요청 안에서 바로 확정(201)
     processing-mode: async
+  consumer:
+    # true: 배치 리스너 (poll 묶음 = DB 트랜잭션 1개, 오프셋 배치 커밋). false: 레코드 리스너 (3~7주차 방식, 비교용)
+    batch-enabled: true
   outbox:
     relay:
       enabled: true

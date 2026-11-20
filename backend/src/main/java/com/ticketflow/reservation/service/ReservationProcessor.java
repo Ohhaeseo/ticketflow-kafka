@@ -13,10 +13,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Clock;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -62,13 +66,50 @@ public class ReservationProcessor {
                 .register(meterRegistry);
     }
 
+    /** 메시지 하나를 자기 트랜잭션에서 처리한다. */
     @Transactional
     public ProcessingOutcome process(ReservationRequestedMessage message) {
+        return processInCurrentTransaction(message);
+    }
+
+    /**
+     * 메시지 여러 개를 <b>하나의 트랜잭션</b>에서 순서대로 처리한다 (배치 리스너용).
+     * 커밋·fsync·재고 행 잠금 획득이 메시지마다가 아니라 배치마다 한 번이 된다.
+     * 메시지별 처리 규칙(행 잠금, 중복 확인, 조건부 재고 감소)은 {@link #process}와 같다.
+     * 같은 배치에 같은 message_id가 두 번 있어도 앞의 처리 이력이 같은 트랜잭션 안에서 보이므로 한 번만 적용된다.
+     * 하나라도 실패하면 배치 전체가 롤백된다.
+     */
+    @Transactional
+    public List<ProcessingOutcome> processBatch(List<ReservationRequestedMessage> messages) {
+        List<ProcessingOutcome> outcomes = new ArrayList<>(messages.size());
+        for (ReservationRequestedMessage message : messages) {
+            outcomes.add(processInCurrentTransaction(message));
+        }
+        return outcomes;
+    }
+
+    private ProcessingOutcome processInCurrentTransaction(ReservationRequestedMessage message) {
         Timer.Sample sample = Timer.start(meterRegistry);
         ProcessingOutcome outcome = processInTransaction(message);
         sample.stop(processingTimer);
-        meterRegistry.counter("ticketflow.reservations.processed", "outcome", outcome.name()).increment();
+        countAfterCommit(outcome);
         return outcome;
+    }
+
+    /** 롤백된 처리를 세지 않도록 커밋된 뒤에만 결과 카운터를 올린다. */
+    private void countAfterCommit(ProcessingOutcome outcome) {
+        Runnable increment = () -> meterRegistry.counter("ticketflow.reservations.processed",
+                "outcome", outcome.name()).increment();
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    increment.run();
+                }
+            });
+        } else {
+            increment.run();
+        }
     }
 
     private ProcessingOutcome processInTransaction(ReservationRequestedMessage message) {
