@@ -15,20 +15,39 @@ Kafka 이벤트 기반 비동기 예약 · 동시성 제어 · 장애 대응 · 
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-FF4438?style=for-the-badge&logo=redis&logoColor=white)
 
-![Status](https://img.shields.io/badge/status-week_7_done-brightgreen?style=flat-square)
+[![CI](https://github.com/Ohhaeseo/ticketflow-kafka/actions/workflows/ci.yml/badge.svg)](https://github.com/Ohhaeseo/ticketflow-kafka/actions/workflows/ci.yml)
+![Status](https://img.shields.io/badge/status-8_weeks_done-brightgreen?style=flat-square)
 ![Tests](https://img.shields.io/badge/tests-62_passed-success?style=flat-square)
 ![Period](https://img.shields.io/badge/period-8_weeks-blue?style=flat-square)
 ![Cost](https://img.shields.io/badge/cost-%E2%82%A90-success?style=flat-square)
 
-[📋 PRD](prd.md) · [🏗️ 아키텍처](docs/architecture.md) · [🗄️ DB 설계](docs/database.md) · [📨 이벤트 계약](docs/event-contract.md) · [📊 벤치마크](docs/benchmark-report.md)
+[📋 PRD](prd.md) · [🏗️ 아키텍처](docs/architecture.md) · [🗄️ DB 설계](docs/database.md) · [📨 이벤트 계약](docs/event-contract.md) · [📊 벤치마크](docs/benchmark-report.md) · [🧯 장애 실험](experiments/consumer-crash.md) · [📈 모니터링](docs/monitoring.md)
 
 </div>
 
 <br>
 
-> [!NOTE]
-> **7주차 완료** (2026-11-20 기준): Redis 기반 사용자별 예약 시도 제한(429, Redis 장애 시 fail-open), 운영 지표(Consumer lag·Outbox 미발행·DLT), 관리자 API, Prometheus + Grafana 대시보드를 추가했습니다 ([모니터링](docs/monitoring.md)).
-> 다음은 8주차 CI(GitHub Actions)와 최종 정리입니다.
+## 🏁 결과 한눈에 보기
+
+| 검증 | 결과 |
+| --- | --- |
+| 티켓 100장에 고유 사용자 1,000명 동시 예약 (k6) | **CONFIRMED 정확히 100건, 초과 판매 0** — 동기·비동기 모두 |
+| 같은 요청 10개 동시 전송 · 같은 Kafka 메시지 재전달 | 예약 1건, 재고 1회 감소 |
+| 부하 중 프로세스 강제 종료 4회 · Kafka 브로커 14초 중단 | **유실 0, 중복 반영 0** |
+| 같은 조건 동기 vs 비동기 (50~500 RPS) | 비동기는 접수 p95 55ms(500 RPS)로 버티지만, 공연 하나의 확정 처리량은 두 방식 모두 약 220건/s |
+| 자동 테스트 | Testcontainers 통합 테스트 62개, GitHub Actions에서 실행 |
+
+### ✅ 완료 기준 (PRD DoD)
+
+| # | 기준 | 상태 | 근거 |
+| --- | --- | :---: | --- |
+| 1 | 100장에 1,000명 → 최종 CONFIRMED 정확히 100 | ✅ | [벤치마크 LOAD-01](docs/benchmark-report.md#결과--load-01-1000명--100장), `OversellPreventionIntegrationTest` |
+| 2 | 중복 요청·중복 메시지·Consumer 재시작에서 초과 판매·중복 확정 0 | ✅ | [중복 메시지](experiments/duplicate-event.md), [강제 종료](experiments/consumer-crash.md), CON-01·MSG-01·MSG-02 테스트 |
+| 3 | DB 커밋–Kafka 발행 사이 장애를 Outbox로 재현·복구 | ✅ | [Outbox 재발행·Kafka 중단](experiments/outbox-republish.md) |
+| 4 | 부하 단계별 접수 p95·확정 p95·lag·오류율 실측 그래프 | ✅ | [벤치마크 그래프](docs/benchmark-report.md#그래프), [Grafana 대시보드](docs/monitoring.md) |
+| 5 | Testcontainers 통합 테스트와 GitHub Actions 통과 | ✅ | [CI](.github/workflows/ci.yml) |
+| 6 | README에 Kafka 도입 이유, 보장 범위, 장애 대응 | ✅ | [왜 Kafka인가](#-왜-kafka인가), [보장 범위](#보장하는-것과-보장하지-않는-것), [장애 대응](#-장애-대응) |
+| 7 | 동기 vs Kafka 비동기를 같은 조건으로 비교 (Kafka가 항상 빠르다고 주장하지 않음) | ✅ | [벤치마크 분석](docs/benchmark-report.md#분석) |
 
 <br>
 
@@ -72,6 +91,14 @@ API는 요청을 **먼저 접수**하고, 확정은 Kafka를 통해 **비동기�
 - 메시지 전달은 항상 **at-least-once**로 가정하고, 모든 Consumer 처리를 멱등하게 만듭니다.
 - **`202 Accepted`는 좌석 확보가 아니라 접수 완료**를 뜻합니다.
 - 엄격한 선착순(공정 대기열)은 범위 밖입니다. HTTP 도착 순서와 Kafka 처리 순서는 다를 수 있습니다.
+
+### 🤔 왜 Kafka인가
+
+요청이 몰리는 순간 **접수와 확정을 분리**하기 위해서입니다 ([ADR-0001](docs/adr/0001-why-kafka.md)).
+
+- **접수 API를 처리 능력과 떼어 놓는다.** 재고 행 하나를 갱신하는 처리량에는 한계가 있습니다(실측 약 220건/s). 동기 방식에서는 그 이상의 요청이 HTTP 연결을 붙잡고 기다리다 밀립니다. 비동기 방식에서는 접수(INSERT 2건)만 하고 나머지는 Kafka가 받아 둡니다. 500 RPS에서 접수 p95는 동기 5,008ms, 비동기 55ms였습니다.
+- **장애를 견딘다.** Kafka 브로커가 멈춰도 접수는 계속되고(Outbox), Consumer가 죽어도 메시지는 남아 재처리됩니다.
+- **대신 감수하는 것:** 결과를 바로 알 수 없고(polling), 처리 대기열(lag)이 쌓이면 확정이 늦어집니다. 1,000명 스파이크에서는 동기 방식이 최종 결과를 더 빨리 냈습니다. 모든 처리는 멱등해야 하고, 운영할 구성 요소가 늘어납니다.
 
 <br>
 
@@ -364,7 +391,7 @@ API, Outbox Relay, Consumer는 **하나의 Spring Boot 코드베이스**에서 �
 | 5 | 12/21 ~ 12/27 | k6 1,000명 시뮬레이션, 병목 분석 | 재고 불변식 + 성능 보고 | ✅ |
 | 6 | 12/28 ~ 01/03 | Consumer 중단·재시작, 중복 발행, DLT | 장애 복구 테스트 | ✅ |
 | 7 | 01/04 ~ 01/10 | Redis 빈도 제한, 지표·모니터링 | 운영 관측 지표 | ✅ |
-| 8 | 01/11 ~ 01/17 | 통합 테스트, CI, 시연 영상 | 재현 가능한 포트폴리오 | ⏳ |
+| 8 | 01/11 ~ 01/17 | 통합 테스트, CI, 시연 영상 | 재현 가능한 포트폴리오 | ✅ (시연 영상은 [대본](docs/demo.md)까지) |
 
 <br>
 
@@ -480,6 +507,8 @@ docker compose -f infrastructure/compose.yml --env-file .env down
 | [docs/api-spec.md](docs/api-spec.md) | REST API 명세 |
 | [docs/benchmark-report.md](docs/benchmark-report.md) | 동기 vs 비동기 벤치마크 결과 |
 | [docs/monitoring.md](docs/monitoring.md) | 운영 지표, Grafana 대시보드, 장애 신호별 확인 방법 |
+| [docs/demo.md](docs/demo.md) | 시연 대본 (8~10분) |
+| [docs/portfolio-summary.md](docs/portfolio-summary.md) | 이력서 문구, 면접에서 이야기할 것 |
 | [docs/adr/](docs/adr/) | 아키텍처 결정 기록 (ADR) |
 | [experiments/](experiments/) | 장애 재현 실험 기록 |
 

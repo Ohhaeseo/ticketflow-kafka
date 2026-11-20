@@ -35,6 +35,8 @@ cd backend
 .\gradlew.bat test
 ```
 
+GitHub Actions(`.github/workflows/ci.yml`)도 push와 PR마다 같은 테스트를 Ubuntu에서 실행합니다.
+
 Docker만 실행 중이면 됩니다. Testcontainers가 Compose와 같은 이미지 태그(`apache/kafka:4.3.2`, `postgres:18.7-alpine`, `redis:8.8.4-alpine`)로 컨테이너를 띄우고, 모든 통합 테스트가 하나의 Spring 컨텍스트와 컨테이너를 공유합니다 (`@IntegrationTest`).
 
 | 테스트 | 검증 내용 |

@@ -3,7 +3,7 @@
 > 요구사항 기준: [PRD §8 시스템 아키텍처](../prd.md#8-시스템-아키텍처). 이 문서는 **구현된 결과**를 주차별로 기록합니다.
 > 설계 결정의 이유는 [ADR-0001](adr/0001-why-kafka.md)에 있습니다.
 
-## 현재 구현 상태 (7주차 완료)
+## 현재 구현 상태 (8주차 완료)
 
 ```mermaid
 flowchart LR
@@ -35,6 +35,7 @@ flowchart LR
 | Redis 빈도 제한 | ✅ 7주차 | 사용자별 10초 20회, Lua INCR+PEXPIRE, fail-open + 5초 차단기 |
 | 운영 지표 · 관리자 API | ✅ 7주차 | lag·Outbox·DLT gauge, 처리 결과 카운터, `/admin/metrics`, `/admin/dlt` ([monitoring.md](monitoring.md)) |
 | Prometheus · Grafana | ✅ 7주차 | Compose `monitoring` 프로필, 대시보드 프로비저닝 |
+| CI | ✅ 8주차 | GitHub Actions: Testcontainers 통합 테스트 + Compose·Prometheus·대시보드·k6 설정 검증 |
 | Redis 빈도 제한 | ⏳ 7주차 | |
 
 ## 목표 구성도
