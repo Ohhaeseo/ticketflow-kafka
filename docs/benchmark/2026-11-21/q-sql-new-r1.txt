@@ -1,0 +1,53 @@
+# PERF-01 q-sql-new-r1
+scenario=stage users=1000 tickets=100 rate=500 duration=20s
+k6_wall_s=23.4 drain_after_k6_s=11.0
+hikari_max_active=10 hikari_max_pending=192 (samples=19)
+=== k6 summary ===
+RUN_LABEL=q-sql-new-r1
+TITLE=PERF-01 q-sql-new-r1
+EVENT_IDS=[273,274,275,276,277,278,279,280,281,282,283]
+reserve_requests=8478
+reserve_rps=382.3
+test_duration_s=22.2
+reserve_p50_ms=2130.3
+reserve_p95_ms=2600.3
+reserve_p99_ms=2659.2
+reserve_max_ms=3510.3
+accepted=8478
+status_409=0
+status_429=0
+status_4xx_other=0
+status_5xx=0
+network_errors=0
+error_rate_pct=0.0
+dropped_iterations=1523
+max_vus=1000
+--- reservations (M2 confirm latency = updated_at - created_at)
+ reservations | confirmed | sold_out | failed | queued | confirm_p50_ms | confirm_p95_ms | confirm_p99_ms | confirm_max_ms 
+--------------+-----------+----------+--------+--------+----------------+----------------+----------------+----------------
+         8478 |      8478 |        0 |      0 |      0 |        12317.3 |        15992.1 |        16253.8 |        16361.4
+
+--- stock invariant per event (PRD 12.3)
+ event_id | total_tickets | remaining_tickets | confirmed | invariant_ok 
+----------+---------------+-------------------+-----------+--------------
+      273 |          1000 |                 0 |      1000 | t
+      274 |          1000 |                 0 |      1000 | t
+      275 |          1000 |                 0 |      1000 | t
+      276 |          1000 |                 0 |      1000 | t
+      277 |          1000 |                 0 |      1000 | t
+      278 |          1000 |                 0 |      1000 | t
+      279 |          1000 |                 0 |      1000 | t
+      280 |          1000 |                 0 |      1000 | t
+      281 |          1000 |               522 |       478 | t
+      282 |          1000 |              1000 |         0 | t
+      283 |          1000 |              1000 |         0 | t
+
+--- outbox (M7, async only)
+ outbox_rows | unpublished | publish_p95_ms | publish_max_ms 
+-------------+-------------+----------------+----------------
+        8478 |           0 |        12361.0 |        12763.9
+
+--- processing throughput (processed_messages)
+ processed | span_s | per_second 
+-----------+--------+------------
+      8478 |  33.40 |        254
