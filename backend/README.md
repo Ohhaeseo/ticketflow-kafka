@@ -2,52 +2,69 @@
 
 Spring Boot 단일 코드베이스입니다. API, Outbox Relay, Consumer를 패키지로 나누고, 필요하면 `api`/`worker` 프로필로 별도 프로세스로 실행합니다.
 
-## 1주차 월요일(11/23): 프로젝트 생성
+## 버전
 
-빌드 파일(`build.gradle`, `settings.gradle`, `gradlew.bat`, `gradle/wrapper/`)과 `TicketFlowApplication.java`는 아직 없습니다.
-[Spring Initializr](https://start.spring.io)로 아래 설정을 생성한 뒤 이 폴더에 풀어 넣으세요. 이미 만들어 둔 패키지 폴더와 합쳐집니다.
-
-| 항목 | 값 |
+| 항목 | 버전 |
 | --- | --- |
-| Project | Gradle - Groovy |
-| Language | Java |
-| Spring Boot | 4.1.x (생성 시점의 최신 패치) |
-| Group | `com` |
-| Artifact | `ticketflow` |
-| Name | `TicketFlow` → 메인 클래스 `TicketFlowApplication` |
-| Package name | `com.ticketflow` |
-| Java | 21 |
+| Java | 21 (Gradle toolchain) |
+| Spring Boot | 4.1.3 (Spring Initializr로 생성) |
+| Gradle | 9.9.2 (wrapper) |
+| spring-kafka / kafka-clients | 4.1.3 / 4.2.2 |
+| Hibernate ORM | 7.4 |
+| Flyway | 12.4 |
+| springdoc-openapi | 3.2.0 (Spring Boot 4.1.x 기준 빌드) |
+| Testcontainers | 2.x (`testcontainers-kafka`, `testcontainers-postgresql`) |
 
-**Dependencies:** Spring Web, Validation, Spring Data JPA, PostgreSQL Driver, Flyway Migration, Spring for Apache Kafka, Spring Data Redis, Spring Boot Actuator, Testcontainers
+## 실행
 
-생성 후 할 일:
+저장소 루트에서 인프라를 먼저 띄웁니다 (루트 README 참고).
 
-- `application.properties`를 `application.yml`로 바꾸고 `local` 프로필을 만듭니다.
-- springdoc-openapi는 Spring Boot 4.x와 호환되는 버전을 확인한 뒤 추가합니다.
-- 패키지 폴더의 `.gitkeep`은 실제 파일이 생기면 지웁니다.
+```powershell
+cd backend
+.\gradlew.bat bootRun
+```
+
+- 기본 프로필은 `local`입니다. 공연 등록 API와 Swagger UI가 켜집니다.
+- DB·Kafka 접속 정보는 루트의 `.env`에서 읽습니다 (`spring.config.import: optional:file:../.env[.properties]`).
+- Compose 없이 Testcontainers로 인프라까지 띄우려면 `.\gradlew.bat bootTestRun`을 실행합니다.
+
+## 테스트
+
+```powershell
+.\gradlew.bat test
+```
+
+Docker만 실행 중이면 됩니다. Testcontainers가 Compose와 같은 이미지 태그(`apache/kafka:4.3.2`, `postgres:18.7-alpine`)로 컨테이너를 띄우고, 모든 통합 테스트가 하나의 Spring 컨텍스트와 컨테이너를 공유합니다 (`@IntegrationTest`).
+
+| 테스트 | 검증 내용 |
+| --- | --- |
+| `TicketFlowApplicationTests` | 헬스 체크 UP (DB 포함), OpenAPI 문서 생성 |
+| `event/EventApiIntegrationTest` | 100장 공연 등록·조회, 목록, 404, 필드 검증 400, 판매 기간 오류, 잘못된 JSON |
+| `event/EventTableConstraintTest` | DB CHECK 제약: 초과 재고, 음수 재고, 0 이하로 감소, 판매 기간 역전 |
+| `messaging/KafkaIntegrationTest` | 기동 시 예약 토픽·DLT 생성(파티션 3), Producer → Consumer 송수신 |
 
 ## 패키지 구조
 
-| 패키지 | 책임 |
-| --- | --- |
-| `event` | 행사 등록·조회, 재고 조회 |
-| `reservation` | 예약 접수·조회 API, 상태 전이, 동기 비교 모드 |
-| `idempotency` | 멱등성 키 검증, 요청 해시 비교 |
-| `outbox` | Outbox 엔티티, Relay(Poller) |
-| `messaging` | Kafka Producer/Consumer 설정, 메시지 DTO, 재시도·DLT 설정 |
-| `monitoring` | 관리자 지표 API, 커스텀 Micrometer 지표 |
-| `global` | 공통 설정, 예외 처리, 응답 형식 |
+| 패키지 | 책임 | 상태 |
+| --- | --- | --- |
+| `event` | 공연 등록·조회, 재고 조회 | ✅ 1주차 |
+| `reservation` | 예약 접수·조회 API, 상태 전이, 동기 비교 모드 | 2주차 |
+| `idempotency` | 멱등성 키 검증, 요청 해시 비교 | 2주차 |
+| `outbox` | Outbox 엔티티, Relay(Poller) | 3주차 |
+| `messaging` | Kafka 토픽·Producer/Consumer 설정, 메시지 DTO, 재시도·DLT | 토픽 설정 ✅, 나머지 3·6주차 |
+| `monitoring` | 관리자 지표 API, 커스텀 Micrometer 지표 | 7주차 |
+| `global` | 공통 설정(OpenAPI), 예외 처리, 오류 응답 형식 | ✅ 1주차 |
 
 ## 테스트 구조
 
 | 폴더 | 대상 테스트 (PRD §12.1) |
 | --- | --- |
-| `test/.../reservation` | CON-01, SEC-01 |
-| `test/.../messaging` | CON-02, MSG-01, MSG-04 |
-| `test/.../outbox` | Outbox 기록·발행, MSG-03 보조 |
-| `test/.../event` | 행사 API |
-| `test/.../support` | Testcontainers 공통 설정, 테스트 데이터 픽스처 |
+| `test/.../support` | Testcontainers 공통 설정, `@IntegrationTest` |
+| `test/.../event` | 공연 API, DB 제약 |
+| `test/.../messaging` | Kafka 연결 · CON-02, MSG-01, MSG-04 (예정) |
+| `test/.../reservation` | CON-01, SEC-01 (예정) |
+| `test/.../outbox` | Outbox 기록·발행, MSG-03 보조 (예정) |
 
 ## Flyway 마이그레이션
 
-`src/main/resources/db/migration/`에 `V1__create_events.sql`처럼 버전 순서대로 추가합니다. 이미 적용된 마이그레이션 파일은 수정하지 않습니다.
+`src/main/resources/db/migration/`에 `V2__...sql`처럼 버전 순서대로 추가합니다. 이미 적용된 마이그레이션 파일은 수정하지 않습니다. JPA는 `ddl-auto: validate`로 스키마와 엔티티가 맞는지만 확인합니다.

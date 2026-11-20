@@ -15,7 +15,8 @@ Kafka 이벤트 기반 비동기 예약 · 동시성 제어 · 장애 대응 · 
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
 ![Redis](https://img.shields.io/badge/Redis-FF4438?style=for-the-badge&logo=redis&logoColor=white)
 
-![Status](https://img.shields.io/badge/status-planning-lightgrey?style=flat-square)
+![Status](https://img.shields.io/badge/status-week_1_done-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-15_passed-success?style=flat-square)
 ![Period](https://img.shields.io/badge/period-8_weeks-blue?style=flat-square)
 ![Cost](https://img.shields.io/badge/cost-%E2%82%A90-success?style=flat-square)
 
@@ -26,7 +27,8 @@ Kafka 이벤트 기반 비동기 예약 · 동시성 제어 · 장애 대응 · 
 <br>
 
 > [!NOTE]
-> 현재 **기획·설계 단계**입니다 (2026-11-20 기준). 문서와 폴더 구조만 있으며, 코드는 1주차(2026-11-23)부터 작성합니다.
+> **1주차 완료** (2026-11-20 기준): 로컬 인프라(PostgreSQL·Kafka KRaft), 공연 등록·조회 API, Kafka 토픽 설정, Testcontainers 통합 테스트까지 동작합니다.
+> 다음은 2주차 예약 접수 API(`202` + `QUEUED`)와 멱등성 키입니다.
 
 <br>
 
@@ -138,9 +140,9 @@ stateDiagram-v2
 | 영역 | 기술 | 용도 |
 | --- | --- | --- |
 | **Language** | ![Java](https://img.shields.io/badge/Java_21-ED8B00?style=flat-square&logo=openjdk&logoColor=white) | 백엔드 언어 |
-| **Framework** | ![Spring Boot](https://img.shields.io/badge/Spring_Boot_4.1-6DB33F?style=flat-square&logo=springboot&logoColor=white) ![Spring Data JPA](https://img.shields.io/badge/Spring_Data_JPA-6DB33F?style=flat-square&logo=spring&logoColor=white) ![Spring Kafka](https://img.shields.io/badge/Spring_for_Apache_Kafka-6DB33F?style=flat-square&logo=spring&logoColor=white) | 트랜잭션, 비즈니스 로직, 이벤트 생산·소비 |
-| **Messaging** | ![Apache Kafka](https://img.shields.io/badge/Apache_Kafka_%28KRaft%29-231F20?style=flat-square&logo=apachekafka&logoColor=white) | 비동기 완충, 재시도, DLT |
-| **Database** | ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white) ![Flyway](https://img.shields.io/badge/Flyway-CC0200?style=flat-square&logo=flyway&logoColor=white) | 원자적 재고 갱신, 스키마 마이그레이션 |
+| **Framework** | ![Spring Boot](https://img.shields.io/badge/Spring_Boot_4.1.3-6DB33F?style=flat-square&logo=springboot&logoColor=white) ![Spring Data JPA](https://img.shields.io/badge/Spring_Data_JPA-6DB33F?style=flat-square&logo=spring&logoColor=white) ![Spring Kafka](https://img.shields.io/badge/Spring_for_Apache_Kafka-6DB33F?style=flat-square&logo=spring&logoColor=white) | 트랜잭션, 비즈니스 로직, 이벤트 생산·소비 |
+| **Messaging** | ![Apache Kafka](https://img.shields.io/badge/Apache_Kafka_4.3_%28KRaft%29-231F20?style=flat-square&logo=apachekafka&logoColor=white) | 비동기 완충, 재시도, DLT |
+| **Database** | ![PostgreSQL](https://img.shields.io/badge/PostgreSQL_18-4169E1?style=flat-square&logo=postgresql&logoColor=white) ![Flyway](https://img.shields.io/badge/Flyway-CC0200?style=flat-square&logo=flyway&logoColor=white) | 원자적 재고 갱신, 스키마 마이그레이션 |
 | **Cache** | ![Redis](https://img.shields.io/badge/Redis-FF4438?style=flat-square&logo=redis&logoColor=white) | 요청 빈도 제한 |
 | **Infra** | ![Docker](https://img.shields.io/badge/Docker_Compose-2496ED?style=flat-square&logo=docker&logoColor=white) ![WSL2](https://img.shields.io/badge/WSL2-0078D4?style=flat-square&logo=linux&logoColor=white) | 로컬 단일 실행 환경 |
 | **Test** | ![JUnit5](https://img.shields.io/badge/JUnit_5-25A162?style=flat-square&logo=junit5&logoColor=white) ![Testcontainers](https://img.shields.io/badge/Testcontainers-291A3F?style=flat-square) | 실제 Kafka·PostgreSQL 통합 테스트 |
@@ -158,7 +160,7 @@ stateDiagram-v2
 
 **P0 — 핵심**
 
-- [ ] 공연 등록·조회
+- [x] 공연 등록·조회
 - [ ] 예약 접수 API (`202` + `reservationId`)
 - [ ] 멱등성 키 기반 중복 요청 방어
 - [ ] Transactional Outbox 발행
@@ -254,6 +256,7 @@ ticketflow-kafka
 ├── .env.example                   # 환경 변수 예시 (.env는 커밋 금지)
 │
 ├── backend/                       # Spring Boot 단일 코드베이스
+│   ├── build.gradle               # Spring Boot 4.1.3 · Java 21 · Gradle 9.9 wrapper
 │   └── src
 │       ├── main
 │       │   ├── java/com/ticketflow
@@ -306,7 +309,7 @@ API, Outbox Relay, Consumer는 **하나의 Spring Boot 코드베이스**에서 �
 | 주차 | 기간 | 목표 | 마일스톤 | 상태 |
 | :---: | :---: | --- | --- | :---: |
 | 0 | ~ 11/20 | 기획·설계 | PRD, 폴더 구조 | ✅ |
-| 1 | 11/23 ~ 11/29 | Spring Boot, PostgreSQL·Kafka Compose, 공연 API | 헬스 체크, DB 연결, 토픽 송수신 | ⏳ |
+| 1 | 11/23 ~ 11/29 | Spring Boot, PostgreSQL·Kafka Compose, 공연 API | 헬스 체크, DB 연결, 토픽 송수신 | ✅ |
 | 2 | 11/30 ~ 12/06 | 예약 테이블, 접수 API, 멱등성 키 | `202` + `QUEUED` | ⏳ |
 | 3 | 12/07 ~ 12/13 | Outbox 트랜잭션, Relay, Kafka Consumer | 접수 → 이벤트 → 예약 완료 | ⏳ |
 | 4 | 12/14 ~ 12/20 | 원자적 재고 감소, 중복 소비 방지 | 100장 초과 확정 없음 | ⏳ |
@@ -319,25 +322,69 @@ API, Outbox Relay, Consumer는 **하나의 Spring Boot 코드베이스**에서 �
 
 ## 🚀 시작하기
 
-> [!NOTE]
-> 실행 방법은 1주차 작업 후 채웁니다.
+**사전 요구사항:** Java 21, Docker Desktop (WSL2 백엔드). k6는 5주차 부하 테스트부터 필요합니다.
 
-**사전 요구사항**
-
-| 도구 | 버전 |
-| --- | --- |
-| Java | 21 |
-| Docker Desktop | WSL2 백엔드 |
-| k6 | 부하 테스트 시 |
+### 1. 환경 변수 준비
 
 ```powershell
-# 환경 점검
-java -version
-docker compose version
-
-# 환경 변수 준비
 Copy-Item .env.example .env
 ```
+
+`.env`의 `POSTGRES_PASSWORD`를 원하는 값으로 바꿉니다. Compose와 Spring Boot가 모두 이 파일을 읽습니다.
+
+### 2. 인프라 실행
+
+```powershell
+docker compose -f infrastructure/compose.yml --env-file .env up -d --wait
+```
+
+| 서비스 | 이미지 | 호스트 주소 | 비고 |
+| --- | --- | --- | --- |
+| PostgreSQL | `postgres:18.7-alpine` | `127.0.0.1:15432` | PC에 설치된 PostgreSQL(5432)과 겹치지 않게 15432 사용 |
+| Kafka (KRaft) | `apache/kafka:4.3.2` | `127.0.0.1:9092` | 단일 노드, 토픽 자동 생성 꺼짐 |
+
+### 3. 애플리케이션 실행
+
+```powershell
+cd backend
+.\gradlew.bat bootRun
+```
+
+| 확인 | 주소 |
+| --- | --- |
+| 헬스 체크 | http://localhost:8080/actuator/health |
+| Swagger UI | http://localhost:8080/swagger-ui/index.html |
+
+기동하면 Flyway가 스키마를 만들고, Kafka에 `reservation.requested.v1`과 `-dlt` 토픽(파티션 3)이 생성됩니다.
+
+### 4. 100장 공연 등록하기
+
+```powershell
+Invoke-RestMethod -Method Post http://localhost:8080/api/v1/events -ContentType 'application/json' -Body '{"title":"Popular Concert","totalTickets":100,"salesStartAt":"2026-11-23T10:00:00Z","salesEndAt":"2026-12-31T23:59:59Z"}'
+```
+
+```powershell
+Invoke-RestMethod http://localhost:8080/api/v1/events/1
+```
+
+공연 등록은 `local` 프로필(기본값)에서만 열립니다.
+
+### 5. 테스트
+
+```powershell
+cd backend
+.\gradlew.bat test
+```
+
+Testcontainers가 Compose와 같은 이미지로 컨테이너를 따로 띄우므로, Docker만 실행 중이면 됩니다.
+
+### 6. 정리
+
+```powershell
+docker compose -f infrastructure/compose.yml --env-file .env down
+```
+
+데이터까지 지우려면 `down -v`를 씁니다.
 
 <br>
 
