@@ -2,6 +2,7 @@ package com.ticketflow.reservation.service;
 
 import com.ticketflow.event.repository.EventStockRepository;
 import com.ticketflow.event.repository.EventStockRepository.StockState;
+import com.ticketflow.idempotency.repository.ProcessedMessageRepository;
 import com.ticketflow.messaging.dto.ReservationRequestedMessage;
 import com.ticketflow.reservation.entity.ReservationStatus;
 import com.ticketflow.reservation.repository.ReservationCommandRepository;
@@ -19,11 +20,15 @@ import java.util.Optional;
 /**
  * 예약 접수 이벤트를 처리해 최종 상태를 정한다 (PRD §8.3, FR-CSM-01, FR-INV-01).
  * <p>
- * 하나의 DB 트랜잭션 안에서 (1) 예약 행 잠금 → (2) QUEUED가 아니면 건너뜀 → (3) 조건부 재고 감소 →
- * (4) 결과에 따라 CONFIRMED / SOLD_OUT / FAILED로 전이한다. 중간에 실패하면 재고와 상태가 함께 롤백된다.
- * 같은 메시지가 여러 번 와도 (2)에서 걸러지므로 재고는 한 번만 줄어든다.
- * <p>
- * 4주차: processed_messages로 메시지 단위 중복 이력을 추가한다.
+ * 하나의 DB 트랜잭션 안에서 아래 순서로 실행한다.
+ * <ol>
+ *   <li>예약 행 잠금 ({@code FOR UPDATE}). 같은 예약에 대한 메시지는 여기서 한 줄로 선다.</li>
+ *   <li>같은 {@code message_id}를 이미 처리했으면 건너뜀 (processed_messages).</li>
+ *   <li>예약이 QUEUED가 아니면 건너뜀 (다른 message_id로 온 중복).</li>
+ *   <li>조건부 재고 감소 → CONFIRMED / SOLD_OUT / FAILED 전이.</li>
+ *   <li>processed_messages에 결과 기록.</li>
+ * </ol>
+ * 중간에 실패하면 재고, 상태, 처리 이력이 함께 롤백되고 오프셋도 커밋되지 않는다 (FR-INV-03).
  */
 @Service
 public class ReservationProcessor {
@@ -34,13 +39,16 @@ public class ReservationProcessor {
 
     private final ReservationCommandRepository reservationCommandRepository;
     private final EventStockRepository eventStockRepository;
+    private final ProcessedMessageRepository processedMessageRepository;
     private final Clock clock;
 
     public ReservationProcessor(ReservationCommandRepository reservationCommandRepository,
                                 EventStockRepository eventStockRepository,
+                                ProcessedMessageRepository processedMessageRepository,
                                 Clock clock) {
         this.reservationCommandRepository = reservationCommandRepository;
         this.eventStockRepository = eventStockRepository;
+        this.processedMessageRepository = processedMessageRepository;
         this.clock = clock;
     }
 
@@ -52,8 +60,21 @@ public class ReservationProcessor {
             return ProcessingOutcome.SKIPPED_NOT_FOUND;
         }
         LockedReservation reservation = locked.get();
+
+        if (processedMessageRepository.exists(message.messageId())) {
+            log.info("Duplicate message skipped: messageId={} reservationId={}", message.messageId(), reservation.id());
+            return ProcessingOutcome.SKIPPED_DUPLICATE_MESSAGE;
+        }
+
+        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
+        ProcessingOutcome outcome = decide(reservation, message, now);
+        processedMessageRepository.record(message.messageId(), reservation.id(), outcome.name(), now);
+        return outcome;
+    }
+
+    private ProcessingOutcome decide(LockedReservation reservation, ReservationRequestedMessage message, Instant now) {
         if (reservation.status().isFinal()) {
-            log.debug("Already processed: reservationId={} status={} messageId={}",
+            log.info("Reservation already final: reservationId={} status={} messageId={}",
                     reservation.id(), reservation.status(), message.messageId());
             return ProcessingOutcome.SKIPPED_ALREADY_PROCESSED;
         }
@@ -62,7 +83,6 @@ public class ReservationProcessor {
                     message.eventId(), reservation.eventId());
         }
 
-        Instant now = clock.instant().truncatedTo(ChronoUnit.MICROS);
         if (eventStockRepository.decrementIfAvailable(reservation.eventId()) == 1) {
             complete(reservation.id(), ReservationStatus.CONFIRMED, null, now);
             return ProcessingOutcome.CONFIRMED;

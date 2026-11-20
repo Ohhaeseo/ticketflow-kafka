@@ -10,7 +10,9 @@ public enum ProcessingOutcome {
     SOLD_OUT,
     /** 판매 기간 종료 후 처리됨, FAILED(SALES_CLOSED)로 전이 */
     FAILED,
-    /** 이미 최종 상태인 예약 (중복 메시지). 아무것도 바꾸지 않음 */
+    /** 이미 처리한 message_id (Kafka 재전달, Outbox 재발행). 아무것도 바꾸지 않고 이력도 남기지 않음 */
+    SKIPPED_DUPLICATE_MESSAGE,
+    /** 다른 message_id지만 예약이 이미 최종 상태. 아무것도 바꾸지 않고 이력만 남김 */
     SKIPPED_ALREADY_PROCESSED,
     /** 예약이 없음. 아무것도 바꾸지 않음 */
     SKIPPED_NOT_FOUND

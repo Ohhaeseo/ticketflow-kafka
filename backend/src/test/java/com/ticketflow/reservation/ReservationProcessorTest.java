@@ -9,6 +9,7 @@ import com.ticketflow.support.IntegrationTest;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.Instant;
@@ -17,6 +18,7 @@ import java.util.UUID;
 
 import static com.ticketflow.support.ReservationRequests.openEvent;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Consumer 처리 로직을 Kafka 없이 직접 호출해 검증한다.
@@ -38,29 +40,45 @@ class ReservationProcessorTest {
     JdbcTemplate jdbcTemplate;
 
     @Test
-    @DisplayName("재고가 있으면 CONFIRMED로 바꾸고 재고를 1 줄인다")
+    @DisplayName("재고가 있으면 CONFIRMED로 바꾸고 재고를 1 줄이며 처리 이력을 남긴다")
     void confirmsAndDecrementsStock() {
         long eventId = openEvent(eventService, 2);
         long reservationId = queued(eventId, 201);
+        ReservationRequestedMessage message = message(reservationId, eventId);
 
-        assertThat(processor.process(message(reservationId, eventId))).isEqualTo(ProcessingOutcome.CONFIRMED);
+        assertThat(processor.process(message)).isEqualTo(ProcessingOutcome.CONFIRMED);
 
         assertThat(status(reservationId)).isEqualTo("CONFIRMED");
         assertThat(remaining(eventId)).isEqualTo(1);
+        assertThat(processedOutcome(message.messageId())).isEqualTo("CONFIRMED");
     }
 
     @Test
-    @DisplayName("같은 메시지를 두 번 처리해도 재고는 한 번만 줄어든다")
-    void duplicateMessageIsSkipped() {
+    @DisplayName("MSG-01 같은 messageId를 두 번 처리하면 두 번째는 건너뛰고 재고는 한 번만 줄어든다")
+    void duplicateMessageIdIsSkipped() {
         long eventId = openEvent(eventService, 5);
         long reservationId = queued(eventId, 202);
         ReservationRequestedMessage message = message(reservationId, eventId);
 
         assertThat(processor.process(message)).isEqualTo(ProcessingOutcome.CONFIRMED);
-        assertThat(processor.process(message)).isEqualTo(ProcessingOutcome.SKIPPED_ALREADY_PROCESSED);
+        assertThat(processor.process(message)).isEqualTo(ProcessingOutcome.SKIPPED_DUPLICATE_MESSAGE);
 
         assertThat(remaining(eventId)).isEqualTo(4);
-        assertThat(status(reservationId)).isEqualTo("CONFIRMED");
+        assertThat(processedCount(reservationId)).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("다른 messageId로 같은 예약이 다시 오면 상태는 그대로 두고 이력만 남긴다")
+    void sameReservationDifferentMessageIdIsSkipped() {
+        long eventId = openEvent(eventService, 5);
+        long reservationId = queued(eventId, 206);
+
+        assertThat(processor.process(message(reservationId, eventId))).isEqualTo(ProcessingOutcome.CONFIRMED);
+        ReservationRequestedMessage second = message(reservationId, eventId);
+        assertThat(processor.process(second)).isEqualTo(ProcessingOutcome.SKIPPED_ALREADY_PROCESSED);
+
+        assertThat(remaining(eventId)).isEqualTo(4);
+        assertThat(processedOutcome(second.messageId())).isEqualTo("SKIPPED_ALREADY_PROCESSED");
     }
 
     @Test
@@ -94,6 +112,44 @@ class ReservationProcessorTest {
     }
 
     @Test
+    @DisplayName("FR-INV-03 재고를 줄인 뒤 상태 변경이 실패하면 재고·상태·처리 이력이 함께 롤백된다")
+    void rollsBackStockWhenStatusUpdateFails() {
+        long eventId = openEvent(eventService, 3);
+        long reservationId = queued(eventId, 299);
+        ReservationRequestedMessage message = message(reservationId, eventId);
+        // user 299의 예약 상태 변경만 실패하게 만드는 트리거. 재고 감소는 이미 실행된 뒤에 실패한다.
+        jdbcTemplate.execute("""
+                CREATE OR REPLACE FUNCTION test_fail_user_299() RETURNS trigger AS $$
+                BEGIN
+                    IF NEW.user_id = 299 AND NEW.status <> 'QUEUED' THEN
+                        RAISE EXCEPTION 'injected failure for rollback test';
+                    END IF;
+                    RETURN NEW;
+                END $$ LANGUAGE plpgsql
+                """);
+        jdbcTemplate.execute("""
+                CREATE TRIGGER test_fail_user_299 BEFORE UPDATE ON reservations
+                FOR EACH ROW EXECUTE FUNCTION test_fail_user_299()
+                """);
+        try {
+            assertThatThrownBy(() -> processor.process(message))
+                    .isInstanceOf(DataAccessException.class)
+                    .hasMessageContaining("injected failure");
+        } finally {
+            jdbcTemplate.execute("DROP TRIGGER IF EXISTS test_fail_user_299 ON reservations");
+            jdbcTemplate.execute("DROP FUNCTION IF EXISTS test_fail_user_299()");
+        }
+
+        assertThat(remaining(eventId)).as("stock restored").isEqualTo(3);
+        assertThat(status(reservationId)).isEqualTo("QUEUED");
+        assertThat(processedCount(reservationId)).isZero();
+
+        // 트리거를 없앤 뒤 같은 메시지를 다시 처리하면 정상 확정된다 (Kafka 재전달 상황)
+        assertThat(processor.process(message)).isEqualTo(ProcessingOutcome.CONFIRMED);
+        assertThat(remaining(eventId)).isEqualTo(2);
+    }
+
+    @Test
     @DisplayName("없는 예약의 메시지는 아무것도 바꾸지 않는다")
     void unknownReservationIsSkipped() {
         assertThat(processor.process(message(999_999_999L, 1L))).isEqualTo(ProcessingOutcome.SKIPPED_NOT_FOUND);
@@ -114,5 +170,15 @@ class ReservationProcessorTest {
 
     private int remaining(long eventId) {
         return jdbcTemplate.queryForObject("SELECT remaining_tickets FROM events WHERE id = ?", Integer.class, eventId);
+    }
+
+    private String processedOutcome(UUID messageId) {
+        return jdbcTemplate.queryForObject(
+                "SELECT outcome FROM processed_messages WHERE message_id = ?", String.class, messageId);
+    }
+
+    private int processedCount(long reservationId) {
+        return jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM processed_messages WHERE reservation_id = ?", Integer.class, reservationId);
     }
 }
