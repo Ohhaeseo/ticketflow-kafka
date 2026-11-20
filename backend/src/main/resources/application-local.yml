@@ -1,7 +1,15 @@
 # 로컬 개발 전용 설정. 공개 배포 환경에서는 이 프로필을 켜지 않는다.
+spring:
+  flyway:
+    # 테스트용 합성 사용자 1,000명 시드 (db/seed/R__seed_test_users.sql)
+    locations: classpath:db/migration,classpath:db/seed
+
 ticketflow:
   admin:
     local-endpoints-enabled: true # POST /api/v1/events 허용 (PRD FR-EVT-01)
+  test-auth:
+    # X-Test-User-Id 헤더로 사용자를 식별한다 (PRD Q4). 실제 인증이 아니므로 local에서만 켠다.
+    enabled: true
 
 management:
   endpoint:
