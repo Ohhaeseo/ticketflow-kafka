@@ -1,6 +1,7 @@
 package com.ticketflow.messaging;
 
 import com.ticketflow.messaging.config.TicketFlowKafkaProperties;
+import com.ticketflow.messaging.consumer.ReservationRequestedListener;
 import com.ticketflow.support.IntegrationTest;
 import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.clients.consumer.Consumer;
@@ -8,10 +9,12 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.config.TopicBuilder;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.KafkaAdmin;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.listener.MessageListenerContainer;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
 
 import java.time.Duration;
@@ -36,6 +39,9 @@ class KafkaIntegrationTest {
     @Autowired
     TicketFlowKafkaProperties properties;
 
+    @Autowired
+    KafkaListenerEndpointRegistry listenerRegistry;
+
     @Test
     @DisplayName("기동 시 예약 토픽과 DLT가 설정한 파티션 수로 생성된다")
     void reservationTopicsAreCreatedOnStartup() {
@@ -48,6 +54,17 @@ class KafkaIntegrationTest {
                 "reservation.requested.v1-dlt");
         assertThat(topics.values())
                 .allSatisfy(topic -> assertThat(topic.partitions()).hasSize(properties.partitions()));
+    }
+
+    @Test
+    @DisplayName("예약 Consumer는 설정한 group id(ticketflow-reservation)로 예약 토픽을 구독한다")
+    void reservationListenerUsesConfiguredGroupId() {
+        MessageListenerContainer container =
+                listenerRegistry.getListenerContainer(ReservationRequestedListener.LISTENER_ID);
+
+        assertThat(container).isNotNull();
+        assertThat(container.getGroupId()).isEqualTo("ticketflow-reservation");
+        assertThat(container.getContainerProperties().getTopics()).containsExactly("reservation.requested.v1");
     }
 
     @Test

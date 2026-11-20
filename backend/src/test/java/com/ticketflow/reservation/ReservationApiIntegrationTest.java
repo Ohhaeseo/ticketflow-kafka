@@ -22,7 +22,9 @@ import static com.ticketflow.support.ReservationRequests.createEvent;
 import static com.ticketflow.support.ReservationRequests.getReservation;
 import static com.ticketflow.support.ReservationRequests.openEvent;
 import static com.ticketflow.support.ReservationRequests.reserve;
+import static org.hamcrest.Matchers.anyOf;
 import static org.hamcrest.Matchers.containsInAnyOrder;
+import static org.hamcrest.Matchers.is;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
@@ -59,9 +61,10 @@ class ReservationApiIntegrationTest {
 
         Integer reservationId = JsonPath.read(body, "$.reservationId");
         String createdAt = JsonPath.read(body, "$.createdAt");
+        // Consumer가 백그라운드에서 돌기 때문에 조회 시점에 이미 확정됐을 수 있다
         mockMvc.perform(getReservation(42, reservationId))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("QUEUED"))
+                .andExpect(jsonPath("$.status", anyOf(is("QUEUED"), is("CONFIRMED"))))
                 .andExpect(jsonPath("$.statusUrl").value("/api/v1/reservations/" + reservationId))
                 // 202 응답과 DB에서 다시 읽은 값의 시각 정밀도가 같아야 한다
                 .andExpect(jsonPath("$.createdAt").value(createdAt));
@@ -81,7 +84,7 @@ class ReservationApiIntegrationTest {
         mockMvc.perform(reserve(43, key, eventId))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.reservationId").value(reservationId))
-                .andExpect(jsonPath("$.status").value("QUEUED"));
+                .andExpect(jsonPath("$.status", anyOf(is("QUEUED"), is("CONFIRMED"))));
     }
 
     @Test

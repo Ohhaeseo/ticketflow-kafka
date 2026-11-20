@@ -33,6 +33,9 @@ spring:
       group-id: ticketflow-reservation
       auto-offset-reset: earliest
       enable-auto-commit: false
+    listener:
+      ack-mode: record # 레코드 처리(=DB 커밋)가 끝난 뒤 오프셋 커밋
+      concurrency: 3   # 파티션 수와 같게. 공연 하나의 메시지는 key 때문에 한 스레드가 순서대로 처리한다
 
 server:
   port: ${SERVER_PORT:8080}
@@ -41,8 +44,14 @@ ticketflow:
   kafka:
     reservation-requested-topic: reservation.requested.v1
     reservation-requested-dlt-topic: reservation.requested.v1-dlt
-    partitions: 3          # PRD Q6 제안값
+    partitions: 3          # PRD Q6
     replication-factor: 1  # 로컬 단일 브로커
+  outbox:
+    relay:
+      enabled: true
+      fixed-delay-ms: 100   # 직전 실행이 끝난 뒤 100ms 후 다시 폴링
+      batch-size: 200
+      send-timeout-ms: 5000
   admin:
     local-endpoints-enabled: false
   test-auth:

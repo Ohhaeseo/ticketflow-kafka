@@ -7,6 +7,7 @@ import com.ticketflow.global.exception.BusinessException;
 import com.ticketflow.global.exception.DuplicateReservationException;
 import com.ticketflow.global.exception.ErrorCode;
 import com.ticketflow.idempotency.service.IdempotencyKeys;
+import com.ticketflow.messaging.producer.ReservationEventOutbox;
 import com.ticketflow.reservation.dto.CreateReservationRequest;
 import com.ticketflow.reservation.dto.ReservationResponse;
 import com.ticketflow.reservation.entity.Reservation;
@@ -23,7 +24,8 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * 예약 접수와 조회. 접수는 QUEUED 저장까지만 하고 재고는 건드리지 않는다 (재고 감소는 4주차 Consumer).
+ * 예약 접수와 조회. 접수는 QUEUED 저장 + Outbox 기록까지만 하고 재고는 건드리지 않는다.
+ * 재고 감소와 확정은 Consumer가 {@link ReservationProcessor}로 처리한다.
  */
 @Service
 @Transactional(readOnly = true)
@@ -33,17 +35,20 @@ public class ReservationService {
     private final ReservationCommandRepository reservationCommandRepository;
     private final EventRepository eventRepository;
     private final UserRepository userRepository;
+    private final ReservationEventOutbox reservationEventOutbox;
     private final Clock clock;
 
     public ReservationService(ReservationRepository reservationRepository,
                               ReservationCommandRepository reservationCommandRepository,
                               EventRepository eventRepository,
                               UserRepository userRepository,
+                              ReservationEventOutbox reservationEventOutbox,
                               Clock clock) {
         this.reservationRepository = reservationRepository;
         this.reservationCommandRepository = reservationCommandRepository;
         this.eventRepository = eventRepository;
         this.userRepository = userRepository;
+        this.reservationEventOutbox = reservationEventOutbox;
         this.clock = clock;
     }
 
@@ -78,7 +83,8 @@ public class ReservationService {
         Optional<Long> createdId = reservationCommandRepository.insertQueuedIfAbsent(
                 event.getId(), user.userId(), idempotencyKey, requestHash, now);
         if (createdId.isPresent()) {
-            // 3주차: 같은 트랜잭션에서 outbox_events 기록
+            // 같은 트랜잭션에서 Outbox 기록: 예약이 커밋되면 이벤트도 반드시 남는다 (FR-OBX-01)
+            reservationEventOutbox.reservationRequested(createdId.get(), event.getId(), now);
             return new ReservationResult(ReservationResponse.queued(createdId.get(), event.getId(), now), true);
         }
 
