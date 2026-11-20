@@ -34,3 +34,6 @@ load-tests/results/
 
 # --- Local Docker volumes (if bind-mounted) ---
 infrastructure/data/
+
+# --- Local tool settings ---
+.claude/
