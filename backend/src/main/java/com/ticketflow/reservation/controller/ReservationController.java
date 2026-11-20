@@ -1,6 +1,7 @@
 package com.ticketflow.reservation.controller;
 
 import com.ticketflow.global.auth.CurrentUser;
+import com.ticketflow.global.ratelimit.ReservationRateLimiter;
 import com.ticketflow.global.response.ErrorResponse;
 import com.ticketflow.idempotency.service.IdempotencyKeys;
 import com.ticketflow.reservation.dto.CreateReservationRequest;
@@ -33,9 +34,11 @@ import java.util.List;
 public class ReservationController {
 
     private final ReservationService reservationService;
+    private final ReservationRateLimiter reservationRateLimiter;
 
-    public ReservationController(ReservationService reservationService) {
+    public ReservationController(ReservationService reservationService, ReservationRateLimiter reservationRateLimiter) {
         this.reservationService = reservationService;
+        this.reservationRateLimiter = reservationRateLimiter;
     }
 
     @Operation(summary = "예약 접수",
@@ -56,12 +59,16 @@ public class ReservationController {
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     @ApiResponse(responseCode = "422", description = "SALES_NOT_STARTED, SALES_ENDED",
             content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
+    @ApiResponse(responseCode = "429", description = "RATE_LIMITED. Retry-After 헤더(초)",
+            content = @Content(schema = @Schema(implementation = ErrorResponse.class)))
     @PostMapping("/reservations")
     public ResponseEntity<ReservationResponse> reserve(
             @Parameter(hidden = true) CurrentUser user,
             @Parameter(example = "demo-user42-concert1-attempt1")
             @RequestHeader(IdempotencyKeys.HEADER) String idempotencyKey,
             @Valid @RequestBody CreateReservationRequest request) {
+        // 업무 검증보다 먼저 센다: 실패하는 요청(409 등)도 반복하면 제한한다 (SEC-01)
+        reservationRateLimiter.checkReservationAttempt(user.userId());
         ReservationResult result = reservationService.reserve(user, idempotencyKey, request);
         ReservationResponse body = result.reservation();
         if (result.created() && result.processed()) {

@@ -1,0 +1,12 @@
+# TicketFlow 로컬 Prometheus. 호스트에서 실행 중인 Spring Boot 앱을 5초마다 수집한다.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: ticketflow
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ["host.docker.internal:8080"]
+        labels:
+          app: ticketflow

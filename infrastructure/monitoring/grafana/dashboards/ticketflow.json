@@ -1,0 +1,132 @@
+{
+  "uid": "ticketflow-overview",
+  "title": "TicketFlow — 예약 처리 개요",
+  "description": "접수 → Outbox → Kafka → Consumer 흐름과 장애 신호 (PRD M1~M7)",
+  "tags": ["ticketflow"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "type": "stat", "title": "Consumer lag",
+      "description": "예약 Consumer group이 아직 처리하지 않은 메시지 수 (M6). -1이면 계산 실패",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "refId": "A", "expr": "ticketflow_consumer_lag" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [
+        { "color": "green", "value": null }, { "color": "orange", "value": 100 }, { "color": "red", "value": 1000 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" }
+    },
+    {
+      "id": 2, "type": "stat", "title": "Outbox 미발행",
+      "description": "Kafka로 아직 보내지 않은 이벤트 수 (M7). 계속 늘면 Kafka 연결 장애",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "refId": "A", "expr": "ticketflow_outbox_unpublished" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [
+        { "color": "green", "value": null }, { "color": "orange", "value": 200 }, { "color": "red", "value": 1000 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "area" }
+    },
+    {
+      "id": 3, "type": "stat", "title": "DLT 누적",
+      "description": "처리할 수 없어 DLT로 간 메시지 (GET /api/v1/admin/dlt 로 원인 확인)",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "refId": "A", "expr": "ticketflow_dead_letters" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [
+        { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "id": 4, "type": "stat", "title": "빈도 제한 거부 (5분)",
+      "description": "사용자별 예약 시도 한도를 넘어 429를 받은 요청 (SEC-01)",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "refId": "A", "expr": "round(increase(ticketflow_ratelimit_rejected_total[5m]))" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [
+        { "color": "green", "value": null }, { "color": "orange", "value": 1 } ] } }, "overrides": [] },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "예약 접수 / 처리 결과 (건/s)",
+      "description": "접수율과 Consumer 처리 결과별 처리율. 접수가 처리보다 많으면 lag가 쌓인다",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(rate(ticketflow_reservations_accepted_total[30s]))", "legendFormat": "접수" },
+        { "refId": "B", "expr": "sum by (outcome) (rate(ticketflow_reservations_processed_total[30s]))", "legendFormat": "처리: {{outcome}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Consumer lag · Outbox 미발행",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "ticketflow_consumer_lag", "legendFormat": "Consumer lag" },
+        { "refId": "B", "expr": "ticketflow_outbox_unpublished", "legendFormat": "Outbox 미발행" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "접수 API 지연 (M1)",
+      "description": "POST /api/v1/reservations 응답 시간 분위수",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(http_server_requests_seconds_bucket{uri=\"/api/v1/reservations\",method=\"POST\"}[30s])))", "legendFormat": "p50" },
+        { "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{uri=\"/api/v1/reservations\",method=\"POST\"}[30s])))", "legendFormat": "p95" },
+        { "refId": "C", "expr": "histogram_quantile(0.99, sum by (le) (rate(http_server_requests_seconds_bucket{uri=\"/api/v1/reservations\",method=\"POST\"}[30s])))", "legendFormat": "p99" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "메시지 처리 시간 · Outbox 최고 대기",
+      "description": "Consumer가 메시지 하나를 처리하는 시간 p95, 가장 오래 기다린 미발행 이벤트",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(ticketflow_reservation_processing_seconds_bucket[30s])))", "legendFormat": "처리 p95" },
+        { "refId": "B", "expr": "ticketflow_outbox_oldest_unpublished_age_seconds", "legendFormat": "Outbox 최고 대기" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] }
+    },
+    {
+      "id": 9, "type": "timeseries", "title": "HTTP 응답 코드 (예약 접수, 건/s)",
+      "description": "202 접수, 409 중복, 429 빈도 제한, 5xx 서버 오류 (M3)",
+      "gridPos": { "x": 0, "y": 20, "w": 8, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (status) (rate(http_server_requests_seconds_count{uri=\"/api/v1/reservations\",method=\"POST\"}[30s]))", "legendFormat": "{{status}}" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
+    },
+    {
+      "id": 10, "type": "timeseries", "title": "DB 커넥션 풀",
+      "description": "pending이 쌓이면 커넥션 풀이 병목 (5주차 LOAD-01 분석)",
+      "gridPos": { "x": 8, "y": 20, "w": 8, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(hikaricp_connections_active)", "legendFormat": "active" },
+        { "refId": "B", "expr": "sum(hikaricp_connections_pending)", "legendFormat": "pending" },
+        { "refId": "C", "expr": "sum(hikaricp_connections_max)", "legendFormat": "max" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "id": 11, "type": "timeseries", "title": "Redis 빈도 제한 상태",
+      "description": "fail-open: Redis 장애로 검사 없이 허용한 요청. 0이 아니면 Redis 확인",
+      "gridPos": { "x": 16, "y": 20, "w": 8, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "rate(ticketflow_ratelimit_fail_open_total[1m])", "legendFormat": "fail-open 허용" },
+        { "refId": "B", "expr": "rate(ticketflow_ratelimit_redis_failures_total[1m])", "legendFormat": "Redis 오류" },
+        { "refId": "C", "expr": "rate(ticketflow_ratelimit_rejected_total[1m])", "legendFormat": "429 거부" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
+    }
+  ]
+}

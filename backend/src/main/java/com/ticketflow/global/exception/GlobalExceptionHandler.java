@@ -1,7 +1,9 @@
 package com.ticketflow.global.exception;
 
+import com.ticketflow.global.ratelimit.RateLimitExceededException;
 import com.ticketflow.global.response.ErrorResponse;
 import com.ticketflow.global.response.ErrorResponse.FieldErrorDetail;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -21,7 +23,11 @@ public class GlobalExceptionHandler {
         ErrorResponse body = e instanceof DuplicateReservationException duplicate
                 ? ErrorResponse.withReservation(code, e.getMessage(), duplicate.reservationId())
                 : ErrorResponse.of(code, e.getMessage());
-        return ResponseEntity.status(code.status()).body(body);
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(code.status());
+        if (e instanceof RateLimitExceededException limited) {
+            response.header(HttpHeaders.RETRY_AFTER, String.valueOf(limited.retryAfterSeconds()));
+        }
+        return response.body(body);
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

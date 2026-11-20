@@ -23,6 +23,15 @@ spring:
         jdbc:
           time_zone: UTC
 
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:16379}
+      # Redis가 죽었을 때 요청이 오래 묶이지 않도록 짧게 둔다 (빈도 제한은 fail-open).
+      # 실패 후 5초 동안은 Redis를 부르지 않으므로 이 대기는 쿨다운마다 한 번만 생긴다.
+      timeout: 500ms
+      connect-timeout: 1s
+
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     producer:
@@ -60,6 +69,16 @@ ticketflow:
       fixed-delay-ms: 100   # 직전 실행이 끝난 뒤 100ms 후 다시 폴링
       batch-size: 200
       send-timeout-ms: 5000
+  rate-limit:
+    reservation:
+      enabled: true
+      # 사용자별 예약 시도: 첫 요청부터 window 동안 max-requests회까지 (PRD FR-RL-01, SEC-01)
+      max-requests: 20
+      window: 10s
+      # Redis 오류 후 이 시간 동안은 Redis를 부르지 않고 바로 허용한다 (fail-open, PRD Q5)
+      fail-open-cooldown: 5s
+  monitoring:
+    refresh-ms: 5000 # Outbox·lag·DLT 지표 갱신 주기
   admin:
     local-endpoints-enabled: false
   test-auth:
@@ -69,7 +88,16 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info,metrics,prometheus
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+  health:
+    redis:
+      # Redis는 빈도 제한 전용이고 fail-open이다. Redis 장애로 앱 전체가 DOWN(재시작 대상)이 되지 않게 한다.
+      # Redis 상태는 ticketflow_ratelimit_fail_open_total / redis_failures_total 지표로 본다.
+      enabled: false
 
 # API 문서는 local 프로필에서만 연다 (application-local.yml)
 springdoc:

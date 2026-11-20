@@ -17,7 +17,7 @@ public class DeadLetterMessageRepository {
         this.jdbcClient = JdbcClient.create(jdbcTemplate);
     }
 
-    /** 같은 원본 레코드는 한 번만 기록한다. */
+    /** 같은 원본 레코드는 한 번만 기록한다. 조회는 monitoring.AdminMetricsService가 한다. */
     public int record(DeadLetter deadLetter, Instant receivedAt) {
         return jdbcClient.sql("""
                         INSERT INTO dead_letter_messages

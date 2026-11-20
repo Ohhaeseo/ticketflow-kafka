@@ -15,6 +15,7 @@ import com.ticketflow.reservation.entity.Reservation;
 import com.ticketflow.reservation.repository.ReservationCommandRepository;
 import com.ticketflow.reservation.repository.ReservationRepository;
 import com.ticketflow.user.repository.UserRepository;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -40,6 +41,7 @@ public class ReservationService {
     private final ReservationProcessor reservationProcessor;
     private final ReservationProperties reservationProperties;
     private final Clock clock;
+    private final MeterRegistry meterRegistry;
 
     public ReservationService(ReservationRepository reservationRepository,
                               ReservationCommandRepository reservationCommandRepository,
@@ -48,7 +50,9 @@ public class ReservationService {
                               ReservationEventOutbox reservationEventOutbox,
                               ReservationProcessor reservationProcessor,
                               ReservationProperties reservationProperties,
-                              Clock clock) {
+                              Clock clock,
+                              MeterRegistry meterRegistry) {
+        this.meterRegistry = meterRegistry;
         this.reservationRepository = reservationRepository;
         this.reservationCommandRepository = reservationCommandRepository;
         this.eventRepository = eventRepository;
@@ -91,6 +95,8 @@ public class ReservationService {
                 event.getId(), user.userId(), idempotencyKey, requestHash, now);
         if (createdId.isPresent()) {
             long reservationId = createdId.get();
+            meterRegistry.counter("ticketflow.reservations.accepted",
+                    "mode", reservationProperties.synchronous() ? "sync" : "async").increment();
             if (reservationProperties.synchronous()) {
                 return processSynchronously(reservationId, event.getId(), now);
             }

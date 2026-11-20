@@ -1,14 +1,14 @@
 # TicketFlow Kafka — 로컬 인프라 (PRD §14.2)
 #
 # 실행 (저장소 루트에서):
-#   docker compose -f infrastructure/compose.yml --env-file .env up -d
+#   docker compose -f infrastructure/compose.yml --env-file .env up -d --wait
+#   모니터링까지:  docker compose -f infrastructure/compose.yml --env-file .env --profile monitoring up -d --wait
 #
 # 규칙
 #   - 이미지 태그는 버전을 고정한다. `latest` 금지 (NFR-REP-02).
 #     테스트(Testcontainers)도 같은 태그를 쓴다: backend/src/test/java/com/ticketflow/support/TestcontainersConfiguration.java
 #   - 호스트 포트는 127.0.0.1에만 바인딩한다 (NFR-SEC-01).
 #   - 비밀값은 루트의 .env에서 읽는다 (.env.example 참고).
-#   - Redis는 7주차에 추가한다.
 
 name: ticketflow
 
@@ -63,6 +63,55 @@ services:
       timeout: 10s
       retries: 12
       start_period: 15s
+
+  redis:
+    # 예약 시도 빈도 제한 전용 (PRD FR-RL-01). 재고·예약의 원본 데이터는 두지 않는다.
+    image: redis:8.8.4-alpine
+    container_name: ticketflow-redis
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "volatile-ttl"]
+    ports:
+      # 6379는 다른 로컬 프로젝트와 겹치기 쉬워 16379를 쓴다
+      - "127.0.0.1:${REDIS_PORT:-16379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # --- 모니터링 (선택): --profile monitoring 으로만 실행 ---
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    container_name: ticketflow-prometheus
+    profiles: ["monitoring"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=2d
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:9090:9090"
+
+  grafana:
+    image: grafana/grafana:13.2.6
+    container_name: ticketflow-grafana
+    profiles: ["monitoring"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      # 로컬 전용: 로그인 없이 대시보드 보기 허용 (읽기 전용)
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/ticketflow.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+    ports:
+      - "127.0.0.1:3000:3000"
 
 volumes:
   postgres-data:

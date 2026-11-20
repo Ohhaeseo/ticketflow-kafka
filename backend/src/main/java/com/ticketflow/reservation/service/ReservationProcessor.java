@@ -7,6 +7,8 @@ import com.ticketflow.messaging.dto.ReservationRequestedMessage;
 import com.ticketflow.reservation.entity.ReservationStatus;
 import com.ticketflow.reservation.repository.ReservationCommandRepository;
 import com.ticketflow.reservation.repository.ReservationCommandRepository.LockedReservation;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -41,19 +43,35 @@ public class ReservationProcessor {
     private final EventStockRepository eventStockRepository;
     private final ProcessedMessageRepository processedMessageRepository;
     private final Clock clock;
+    private final MeterRegistry meterRegistry;
+    private final Timer processingTimer;
 
     public ReservationProcessor(ReservationCommandRepository reservationCommandRepository,
                                 EventStockRepository eventStockRepository,
                                 ProcessedMessageRepository processedMessageRepository,
-                                Clock clock) {
+                                Clock clock,
+                                MeterRegistry meterRegistry) {
         this.reservationCommandRepository = reservationCommandRepository;
         this.eventStockRepository = eventStockRepository;
         this.processedMessageRepository = processedMessageRepository;
         this.clock = clock;
+        this.meterRegistry = meterRegistry;
+        this.processingTimer = Timer.builder("ticketflow.reservation.processing")
+                .description("예약 메시지 하나를 처리하는 시간 (커밋 제외)")
+                .publishPercentileHistogram()
+                .register(meterRegistry);
     }
 
     @Transactional
     public ProcessingOutcome process(ReservationRequestedMessage message) {
+        Timer.Sample sample = Timer.start(meterRegistry);
+        ProcessingOutcome outcome = processInTransaction(message);
+        sample.stop(processingTimer);
+        meterRegistry.counter("ticketflow.reservations.processed", "outcome", outcome.name()).increment();
+        return outcome;
+    }
+
+    private ProcessingOutcome processInTransaction(ReservationRequestedMessage message) {
         Optional<LockedReservation> locked = reservationCommandRepository.lockForProcessing(message.reservationId());
         if (locked.isEmpty()) {
             log.warn("Reservation not found: reservationId={} messageId={}", message.reservationId(), message.messageId());
